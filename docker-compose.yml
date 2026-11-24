@@ -23,6 +23,11 @@ services:
     <<: *common
     command: python -m bots.reporter
 
+  optimizer:               # Bot 5: ottimizzazione walk-forward settimanale su dati reali (non applica nulla da solo)
+    <<: *common
+    command: python -m bots.optimizer
+    cpu_shares: 256        # priorità bassa: i bot di trading vengono prima
+
   updater:                 # Bot 4: aggiornamento automatico da GitHub (avvisa su Telegram, testa, installa)
     build: ./updater
     image: tradebot-updater:latest

@@ -5,7 +5,7 @@
   • 21:30  "Cosa ho fatto": operazioni, P&L, equity, lezioni apprese
   • domenica: report settimanale + checklist "pronto per il conto reale"
   • watchdog: avvisa se il Trader smette di girare (PC spento, crash)
-  • comandi: /status /piano /report /settimana /lezioni /check /pausa /riprendi
+  • comandi: /status /piano /report /settimana /lezioni /ottimizza /check /pausa /riprendi
 """
 import html
 import time
@@ -140,6 +140,11 @@ def weekly_report():
                 lines.append(f"  · {STRAT[strat]}: {st['n']} op · win {st['win_rate']:.0%} · {st['avg_r']:+.2f}R medio · "
                              f"PF {st['profit_factor']:.2f}")
     lines += shadow_block(_since(24 * 7)) + shadow_block("1970", "dall'inizio")
+    opt = db.kv_get("last_optimization")
+    if opt:
+        verdict = "✅ consiglio di applicare i parametri suggeriti" if opt["recommend"] else "➖ parametri attuali confermati"
+        lines += ["", f"🧪 <b>Ultima ottimizzazione</b> ({opt['ts'][:10]}): trend fuori campione "
+                      f"{opt['walk_forward'].get('n', 0)} op, {opt['walk_forward'].get('avg_r', 0):+.2f}R medio · {verdict}"]
     lines += ["", "✅ <b>Checklist passaggio al conto reale</b>"]
     checks = go_live_readiness(db.closed_trades(limit=10000), db.equity_since("1970-01-01"))
     lines += [f"{'✅' if ok else '⬜'} {esc(txt)}" for txt, ok in checks]
@@ -208,6 +213,12 @@ def handle_command(text: str):
     elif cmd == "/lezioni":
         ls = db.recent_lessons(15)
         telegram.send("🧠 <b>Lezioni in memoria</b>\n" + ("\n".join(f"• {esc(l)}" for l in ls) or "ancora nessuna"))
+    elif cmd == "/ottimizza":
+        if db.kv_get("optimization_running"):
+            telegram.send("🧪 Un'ottimizzazione è già in corso: ti scrivo quando finisce.")
+        else:
+            db.kv_set("optimize_requested", True)
+            telegram.send("🧪 Ottimizzazione richiesta: parte entro 10 minuti e dura un po'. Ti scrivo il risultato.")
     elif cmd == "/check":
         telegram.send("🩺 <b>Diagnostica</b>\n" + "\n".join(f"{'✅' if ok else '❌'} {esc(n)}: {esc(d)}" for n, ok, d in run_checks()))
     elif cmd == "/pausa":
@@ -218,7 +229,7 @@ def handle_command(text: str):
         db.kv_set("cooldown_until", 0)
         telegram.send("▶️ Bot riattivato.")
     else:
-        telegram.send("Comandi: /status /piano /report /settimana /lezioni /check /pausa /riprendi")
+        telegram.send("Comandi: /status /piano /report /settimana /lezioni /ottimizza /check /pausa /riprendi")
 
 
 def main():

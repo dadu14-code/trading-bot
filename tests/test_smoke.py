@@ -156,3 +156,14 @@ def test_capitulation_exit_target():
     assert reason and "obiettivo" in reason
     reason, _ = signals.evaluate_exit(t, 101, 2, 1, "BEAR", None, CFG)     # BEAR non fa uscire un rimbalzo
     assert reason is None
+
+
+def test_walk_forward_mixed_lengths():
+    """Crypto (24/7) ed ETF hanno numeri di barre diversi: i blocchi devono coincidere nel tempo."""
+    from tradebot import optimize
+    optimize.GRID = {"entry_threshold": [0.55], "analog_min_winrate": [0.52], "atr_stop_mult": [2.0],
+                     "atr_trail_mult": [3.0], "time_stop_bars_4h": [30]}
+    long_pre = backtest.precompute(backtest.synthetic(4000, 3), CFG, warmup=1500)
+    short_pre = backtest.precompute(backtest.synthetic(3000, 5), CFG, warmup=1500)
+    res = optimize.walk_forward([(long_pre, 0.0025), (short_pre, 0.0005)], backtest.params_from(CFG), folds=2)
+    assert res["period"][0] < res["period"][1] and len(res["folds"]) == 2

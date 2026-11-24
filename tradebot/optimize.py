@@ -54,38 +54,40 @@ def neighbours(combo: tuple, keys: list) -> list[tuple]:
 
 
 def walk_forward(pres: list[tuple[dict, float]], base: dict, folds: int = 4) -> dict:
+    """I blocchi sono divisi per DATA (non per numero di barre): crypto (24/7) ed ETF
+    (solo orari di borsa) hanno quantità di barre diverse ma gli stessi periodi."""
     keys = list(GRID)
     combos = list(itertools.product(*GRID.values()))
-    n = len(pres[0][0]["df"])
-    w0 = pres[0][0]["warmup"]
-    edges = np.linspace(w0, n, folds + 2).astype(int)   # il primo blocco serve solo da training iniziale
-    oos_trades, chosen, report = [], [], []
+    t0 = max(pre["df"].index[pre["warmup"]] for pre, _ in pres)
+    t1 = min(pre["df"].index[-1] for pre, _ in pres)
+    tedges = [t0 + (t1 - t0) * k / (folds + 1) for k in range(folds + 2)]  # il primo blocco è solo training
+    idx = [[int(pre["df"].index.searchsorted(t)) for t in tedges] for pre, _ in pres]
+    for row, (pre, _) in zip(idx, pres):
+        row[-1] = len(pre["df"])
+
+    def sims(params, a, b):  # a, b = numero del bordo temporale
+        return [backtest.simulate(pre, params, fee=fee, start=idx[j][a], end=idx[j][b]) for j, (pre, fee) in enumerate(pres)]
 
     def score(combo, a, b):
-        p = {**base, **dict(zip(keys, combo))}
-        return sum(objective(backtest.simulate(pre, p, fee=fee, start=a, end=b)) for pre, fee in pres)
+        return sum(objective(r) for r in sims({**base, **dict(zip(keys, combo))}, a, b))
 
-    for f in range(1, folds + 1):
-        tr_a, tr_b, te_a, te_b = edges[0], edges[f], edges[f], edges[f + 1]
-        raw = {c: score(c, tr_a, tr_b) for c in combos}
+    def pick(a, b):
+        raw = {c: score(c, a, b) for c in combos}
         # robustezza: media del punteggio della combinazione e dei suoi vicini
         robust = {c: np.mean([raw[c]] + [raw[x] for x in neighbours(c, keys)]) for c in combos}
-        best = max(robust, key=robust.get)
-        p = {**base, **dict(zip(keys, best))}
-        fold_trades = []
-        for pre, fee in pres:
-            fold_trades += backtest.simulate(pre, p, fee=fee, start=te_a, end=te_b)["trades"]
-        st = backtest.trade_stats(fold_trades)
-        report.append({"fold": f, "params": dict(zip(keys, best)), "oos": st})
+        return max(robust, key=robust.get)
+
+    oos_trades, report = [], []
+    for f in range(1, folds + 1):
+        best = pick(0, f)
+        fold_trades = sum((r["trades"] for r in sims({**base, **dict(zip(keys, best))}, f, f + 1)), [])
+        report.append({"fold": f, "from": str(tedges[f].date()), "to": str(tedges[f + 1].date()),
+                       "params": dict(zip(keys, best)), "oos": backtest.trade_stats(fold_trades)})
         oos_trades += fold_trades
-        chosen.append(best)
-    # parametri finali: ottimizzati su tutta la storia con lo stesso criterio di robustezza
-    raw = {c: score(c, edges[0], n) for c in combos}
-    robust = {c: np.mean([raw[c]] + [raw[x] for x in neighbours(c, keys)]) for c in combos}
-    final = dict(zip(keys, max(robust, key=robust.get)))
-    cur = backtest.trade_stats(sum((backtest.simulate(pre, base, fee=fee, start=edges[1])["trades"] for pre, fee in pres), []))
+    final = dict(zip(keys, pick(0, folds + 1)))   # parametri finali: tutta la storia, stesso criterio
+    cur = backtest.trade_stats(sum((r["trades"] for r in sims(base, 1, folds + 1)), []))
     return {"folds": report, "oos_total": backtest.trade_stats(oos_trades), "current_params_same_period": cur,
-            "suggested": final}
+            "suggested": final, "period": [str(tedges[1].date()), str(t1.date())]}
 
 
 def main():

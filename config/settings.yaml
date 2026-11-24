@@ -73,6 +73,15 @@ shadow_variants:
   aggressiva: {signals: {entry_threshold: 0.50, analog_min_winrate: 0.50}}
   trend_lungo: {risk: {atr_trail_mult: 4.0, time_stop_bars_4h: 60}}
 
+# Ottimizzazione settimanale automatica (bot optimizer). NON applica nulla da sola.
+optimization:
+  day: "sun"
+  hour: 4                    # domenica alle 04:00, pronta per il report delle 19:00
+  history_days: 730          # 2 anni di dati orari
+  folds: 4
+  min_gain_r: 3.0            # i suggeriti vanno consigliati solo se battono gli attuali di almeno 3R…
+  min_trades: 20             # …su almeno 20 operazioni fuori campione
+
 schedule:
   trader_every_minutes: 5
   strategist_every_hours: 4

@@ -39,6 +39,17 @@ git config --global user.email "updater@tradebot.local"; git config --global use
 [ -d .git ] || git init -q
 last_err=0
 
+app_services() {
+  local s; s=$(docker compose config --services 2>/dev/null | grep -v -x -e updater -e tools)
+  echo "${s:-strategist trader reporter}"   # mai vuoto: "up -d" senza nomi riavvierebbe anche l'updater
+}
+
+# all'avvio: assicura che tutti i servizi siano attivi (anche quelli aggiunti da un aggiornamento)
+if git rev-parse -q --verify HEAD >/dev/null 2>&1; then
+  # shellcheck disable=SC2046
+  docker compose up -d $(app_services) >/tmp/up.log 2>&1 && log "servizi attivi: $(app_services | tr '\n' ' ')"
+fi
+
 while true; do
   if git fetch -q "$(remote_url)" "$BRANCH" 2>/tmp/fetch.err; then
     NEW=$(git rev-parse FETCH_HEAD)
@@ -57,7 +68,8 @@ Eseguo i test prima di installarlo…"
       git reset -q --hard "$NEW"
       if docker compose build -q >/tmp/build.log 2>&1 && \
          docker compose run --rm -T tools python -m pytest -q tests >/tmp/test.log 2>&1; then
-        docker compose up -d strategist trader reporter >/tmp/up.log 2>&1
+        # shellcheck disable=SC2046
+        docker compose up -d $(app_services) >/tmp/up.log 2>&1
         tg "✅ Aggiornamento ${NEW:0:7} installato: test superati, bot riavviati."
         log "installata ${NEW:0:7}"
         docker compose up -d --build updater >/dev/null 2>&1   # se è cambiato anche l'updater, si aggiorna per ultimo
