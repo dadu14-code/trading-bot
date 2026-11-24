@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS equity(
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY, ts TEXT, kind TEXT, text TEXT, sent INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS llm_usage(
+  id INTEGER PRIMARY KEY, ts TEXT, purpose TEXT, model TEXT,
+  input_tokens INTEGER, output_tokens INTEGER, cost_usd REAL);
 CREATE TABLE IF NOT EXISTS shadow_trades(
   id INTEGER PRIMARY KEY, variant TEXT, symbol TEXT, qty REAL, entry_price REAL, entry_ts TEXT,
   stop REAL, initial_stop REAL, highest REAL, lowest REAL,
@@ -210,3 +213,17 @@ def peak_equity() -> float | None:
     with conn() as c:
         r = c.execute("SELECT MAX(equity) m FROM equity").fetchone()
     return r["m"] if r else None
+
+
+# ── consumi Claude ───────────────────────────────────────────────
+def record_llm_usage(purpose: str, model: str, input_tokens: int, output_tokens: int, cost_usd: float):
+    with conn() as c:
+        c.execute("INSERT INTO llm_usage(ts,purpose,model,input_tokens,output_tokens,cost_usd) VALUES(?,?,?,?,?,?)",
+                  (now_iso(), purpose, model, input_tokens, output_tokens, cost_usd))
+
+
+def llm_usage_since(since_iso: str = "1970") -> dict:
+    with conn() as c:
+        r = c.execute("SELECT COUNT(*) n, COALESCE(SUM(input_tokens),0) i, COALESCE(SUM(output_tokens),0) o, "
+                      "COALESCE(SUM(cost_usd),0) c FROM llm_usage WHERE ts>=?", (since_iso,)).fetchone()
+    return {"calls": r["n"], "input_tokens": r["i"], "output_tokens": r["o"], "cost_usd": r["c"]}

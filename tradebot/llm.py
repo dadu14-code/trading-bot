@@ -9,7 +9,8 @@ import logging
 
 import anthropic
 
-from .config import ENV
+from . import db
+from .config import ENV, load_settings
 
 log = logging.getLogger(__name__)
 
@@ -86,12 +87,22 @@ POSTMORTEM_SCHEMA = {
 }
 
 
+DEFAULT_PRICES = {"claude-opus-5-5": [4.0, 20.0], "claude-sonnet-5-5": [2.0, 10.0], "claude-haiku-5-5": [0.10, 0.50]}
+
+
+def call_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Costo in $ di una chiamata (prezzi per milione di token, configurabili in settings.yaml)."""
+    prices = {**DEFAULT_PRICES, **(load_settings().get("llm_prices") or {})}
+    pin, pout = prices.get(model) or next((v for k, v in prices.items() if model.startswith(k)), prices["claude-opus-5-5"])
+    return (input_tokens * pin + output_tokens * pout) / 1_000_000
+
+
 class SeniorTrader:
     def __init__(self):
         self.enabled = bool(ENV.anthropic_key)
         self.client = anthropic.Anthropic() if self.enabled else None
 
-    def _ask(self, prompt: str, schema: dict, effort: str = "high") -> dict | None:
+    def _ask(self, prompt: str, schema: dict, effort: str = "high", purpose: str = "strategia") -> dict | None:
         if not self.enabled:
             return None
         try:
@@ -113,6 +124,14 @@ class SeniorTrader:
         except anthropic.APIConnectionError:
             log.error("Claude: errore di connessione")
             return None
+        try:  # registra token e costo reali, letti dalla risposta dell'API
+            u = resp.usage
+            tin = (u.input_tokens or 0) + (getattr(u, "cache_creation_input_tokens", 0) or 0) + (getattr(u, "cache_read_input_tokens", 0) or 0)
+            cost = call_cost(resp.model, tin, u.output_tokens or 0)
+            db.record_llm_usage(purpose, resp.model, tin, u.output_tokens or 0, cost)
+            log.info("Claude %s: %d token in, %d out, %.4f $", purpose, tin, u.output_tokens or 0, cost)
+        except Exception as e:
+            log.warning("registrazione costi fallita: %s", e)
         if resp.stop_reason in ("refusal", "max_tokens"):
             log.warning("Claude: risposta non utilizzabile (%s)", resp.stop_reason)
             return None
@@ -137,4 +156,4 @@ class SeniorTrader:
                   f"Operazioni:\n```json\n{json.dumps(trades, ensure_ascii=False, default=str)}\n```\n"
                   f"Lezioni già note:\n```json\n{json.dumps(lessons, ensure_ascii=False)}\n```\n"
                   f"Contesto di mercato:\n```json\n{json.dumps(market_context, ensure_ascii=False, default=str)}\n```")
-        return self._ask(prompt, POSTMORTEM_SCHEMA, effort="high")
+        return self._ask(prompt, POSTMORTEM_SCHEMA, effort="high", purpose="postmortem")

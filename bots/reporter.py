@@ -5,7 +5,7 @@
   • 21:30  "Cosa ho fatto": operazioni, P&L, equity, lezioni apprese
   • domenica: report settimanale + checklist "pronto per il conto reale"
   • watchdog: avvisa se il Trader smette di girare (PC spento, crash)
-  • comandi: /status /piano /report /settimana /lezioni /ottimizza /check /pausa /riprendi
+  • comandi: /status /piano /report /costi /settimana /lezioni /ottimizza /check /pausa /riprendi
 """
 import html
 import time
@@ -56,6 +56,43 @@ def account_line() -> str:
     return f"💰 Equity <b>{a['equity']:,.2f}$</b> ({day:+.2%} oggi) · cash {a['cash']:,.2f}$"
 
 
+def result_block(hours: int, title: str) -> list[str]:
+    """Guadagno del conto contro costo di Claude, con proiezione sul futuro conto reale."""
+    rp = CFG.get("report", {})
+    cap, cur, fx = rp.get("real_capital", 100), rp.get("real_currency", "EUR"), rp.get("usd_per_eur", 1.08)
+    sym = "€" if cur == "EUR" else cur
+    since = _since(hours)
+    closed = db.closed_trades(since_iso=since, limit=10000)
+    realized = sum(t["pnl"] or 0 for t in closed)
+    eq_now = broker.account()["equity"]
+    rows = db.equity_since(since)
+    eq_start = rows[0]["equity"] if rows else eq_now
+    change = eq_now - eq_start
+    u = db.llm_usage_since(since)
+    first = db.equity_since("1970")
+    eq0 = first[0]["equity"] if first else eq_now
+    u_all = db.llm_usage_since("1970")
+    tot_change = eq_now - eq0
+    lines = [f"📊 <b>{title}</b>",
+             f"• Posizioni chiuse: {len(closed)} · P&L realizzato <b>{realized:+,.2f}$</b>"]
+    for t in closed:
+        lines.append(f"   – {esc(t['symbol'])} [{STRAT.get(t.get('strategy') or 'trend')}] {t['pnl']:+,.2f}$ "
+                     f"({(t['r_multiple'] or 0):+.2f}R) · {esc(t['exit_reason'])}")
+    lines += [f"• Variazione del conto (incluse posizioni aperte): <b>{change:+,.2f}$</b> ({change / eq_start:+.2%})",
+              f"• Costo Claude: <b>{u['cost_usd']:.2f}$</b> · {u['calls']} analisi · "
+              f"{(u['input_tokens'] + u['output_tokens']) / 1000:,.0f}k token "
+              f"({u['input_tokens'] / 1000:,.0f}k in, {u['output_tokens'] / 1000:,.0f}k out)",
+              f"• <b>Netto: {change - u['cost_usd']:+,.2f}$</b> (variazione conto − Claude)",
+              f"• Dall'inizio: conto {tot_change:+,.2f}$ ({tot_change / eq0:+.2%}) − Claude {u_all['cost_usd']:.2f}$ "
+              f"= <b>{tot_change - u_all['cost_usd']:+,.2f}$</b>"]
+    # proiezione: stesso rendimento % sul capitale reale, ma costo Claude identico (non scala col capitale)
+    g_day, c_day = cap * change / eq_start, u["cost_usd"] / fx
+    g_all, c_all = cap * tot_change / eq0, u_all["cost_usd"] / fx
+    lines += [f"• 🔮 Su un conto reale da {cap:,.0f}{sym}: {g_day:+.2f}{sym} − Claude {c_day:.2f}{sym} = "
+              f"<b>{g_day - c_day:+.2f}{sym}</b> · dall'inizio {g_all - c_all:+.2f}{sym}"]
+    return lines
+
+
 def morning_report():
     d = db.latest_directive() or {}
     if not d:
@@ -89,6 +126,7 @@ def evening_report():
     closed = db.closed_trades(since_iso=since)
     st = trade_stats(closed)
     lines = [f"🌙 <b>COSA HO FATTO OGGI — {datetime.now().strftime('%d/%m/%Y')}</b>", account_line(), ""]
+    lines += result_block(24, "RISULTATO DELLA GIORNATA") + [""]
     lines.append(f"🔵 Aperte: {len(opened)}   ✅ Chiuse: {len(closed)}" +
                  (f"   P&L realizzato: <b>{st['pnl']:+,.2f}$</b> (win {st['win_rate']:.0%})" if closed else ""))
     for t in opened:
@@ -127,7 +165,8 @@ def weekly_report():
     alltime = trade_stats(db.closed_trades(limit=10000))
     eq = db.equity_since(_since(24 * 7))
     wk = (eq[-1]["equity"] / eq[0]["equity"] - 1) if len(eq) > 1 else 0
-    lines = ["📅 <b>REPORT SETTIMANALE</b>", f"Rendimento settimana: <b>{wk:+.2%}</b>"]
+    lines = ["📅 <b>REPORT SETTIMANALE</b>", f"Rendimento settimana: <b>{wk:+.2%}</b>", ""]
+    lines += result_block(24 * 7, "RISULTATO DELLA SETTIMANA") + [""]
     if s["n"]:
         lines.append(f"Operazioni {s['n']} · win {s['win_rate']:.0%} · PF {s['profit_factor']:.2f} · "
                      f"media {s['avg_r']:+.2f}R · P&L {s['pnl']:+,.2f}$")
@@ -213,6 +252,8 @@ def handle_command(text: str):
     elif cmd == "/lezioni":
         ls = db.recent_lessons(15)
         telegram.send("🧠 <b>Lezioni in memoria</b>\n" + ("\n".join(f"• {esc(l)}" for l in ls) or "ancora nessuna"))
+    elif cmd == "/costi":
+        telegram.send("\n".join(result_block(24, "ULTIME 24 ORE") + [""] + result_block(24 * 7, "ULTIMI 7 GIORNI")))
     elif cmd == "/ottimizza":
         if db.kv_get("optimization_running"):
             telegram.send("🧪 Un'ottimizzazione è già in corso: ti scrivo quando finisce.")
@@ -229,7 +270,7 @@ def handle_command(text: str):
         db.kv_set("cooldown_until", 0)
         telegram.send("▶️ Bot riattivato.")
     else:
-        telegram.send("Comandi: /status /piano /report /settimana /lezioni /ottimizza /check /pausa /riprendi")
+        telegram.send("Comandi: /status /piano /report /costi /settimana /lezioni /ottimizza /check /pausa /riprendi")
 
 
 def main():
