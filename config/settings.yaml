@@ -1,0 +1,38 @@
+# Universo: le crypto girano 24/7, gli ETF solo a mercato USA aperto.
+universe:
+  crypto: ["BTC/USD", "ETH/USD", "SOL/USD"]
+  stocks: ["SPY", "QQQ", "GLD"]
+
+timeframes:            # analisi temporale multi-orizzonte
+  long: "1Day"         # tendenza primaria (mesi)
+  medium: "4Hour"      # tendenza intermedia (settimane)
+  short: "1Hour"       # timing d'ingresso (giorni)
+
+risk:
+  risk_per_trade_pct: 0.75     # % equity rischiata tra ingresso e stop
+  max_position_pct: 20         # peso massimo di un singolo asset
+  max_total_exposure_pct: 80   # esposizione lorda massima
+  max_crypto_exposure_pct: 40  # le crypto sono correlate: tetto di cluster
+  max_open_positions: 5
+  atr_stop_mult: 2.0           # stop iniziale = ingresso - 2*ATR(4H)
+  atr_trail_mult: 3.0          # trailing chandelier = max dal'ingresso - 3*ATR(4H)
+  time_stop_bars_4h: 30        # ~5 giorni senza progressi → esci
+  # Circuit breaker (ispirato a drawdown-circuit-breaker)
+  daily_loss_halt_pct: 3.0     # stop nuovi ingressi per oggi
+  weekly_loss_derisk_pct: 6.0  # dimezza il rischio
+  max_drawdown_kill_pct: 15.0  # chiude tutto e mette in pausa
+  losing_streak_cooldown: 3    # N perdite di fila → pausa 24h sui nuovi ingressi
+
+signals:
+  entry_threshold: 0.55        # punteggio composito minimo (0..1) per entrare
+  weights: {long: 0.30, medium: 0.25, trigger: 0.20, analog: 0.25}
+  analog_k: 40                 # n. situazioni storiche più simili da confrontare
+  analog_horizon_bars: 24      # orizzonte di uscita delle analogie (barre 1H)
+  analog_min_winrate: 0.52
+
+schedule:
+  trader_every_minutes: 5
+  strategist_every_hours: 4
+  morning_report: "08:00"      # "cosa sto facendo / piano di oggi"
+  evening_report: "21:30"      # "cosa ho fatto oggi"
+  weekly_report_day: "sun"

@@ -1,0 +1,19 @@
+# Tre bot indipendenti che condividono lo stesso database SQLite (volume ./data).
+x-common: &common
+  build: .
+  env_file: .env
+  volumes: ["./data:/app/data", "./config:/app/config:ro"]
+  restart: always
+  logging: {driver: json-file, options: {max-size: "10m", max-file: "5"}}
+
+services:
+  strategist:            # Bot 1: il "senior trader" – regime di mercato, bias, lezioni
+    <<: *common
+    command: python -m bots.strategist
+  trader:                # Bot 2: esecuzione – segnali, rischio, ordini, stop
+    <<: *common
+    command: python -m bots.trader
+    depends_on: [strategist]
+  reporter:              # Bot 3: Telegram – report, alert, comandi
+    <<: *common
+    command: python -m bots.reporter
