@@ -4,7 +4,8 @@
   • 08:00  "Cosa sto facendo": piano del giorno, visione di mercato, posizioni
   • 21:30  "Cosa ho fatto": operazioni, P&L, equity, lezioni apprese
   • domenica: report settimanale + checklist "pronto per il conto reale"
-  • comandi: /status /piano /report /settimana /lezioni /pausa /riprendi /help
+  • watchdog: avvisa se il Trader smette di girare (PC spento, crash)
+  • comandi: /status /piano /report /settimana /lezioni /check /pausa /riprendi
 """
 import html
 import time
@@ -12,10 +13,11 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from tradebot import db, telegram
+from tradebot import db, macro, telegram
 from tradebot.broker import AlpacaBroker
 from tradebot.config import ENV, load_settings, setup_logging
 from tradebot.stats import go_live_readiness, max_drawdown, trade_stats
+from tradebot.check import run_checks
 
 log = setup_logging("reporter")
 CFG = load_settings()
@@ -61,6 +63,7 @@ def morning_report():
         lines.append(f"• <b>{esc(s['symbol'])}</b> {BIAS.get(s['bias'], s['bias'])} · conv {s['conviction']:.0%} · "
                      f"{esc(s['horizon'])}\n   <i>{esc(s['reasoning'])}</i>")
     lines += ["", "📂 <b>Posizioni</b>", positions_block()]
+    lines += events_block()
     if d.get("warnings"):
         lines += ["", "⚠️ " + "\n⚠️ ".join(esc(w) for w in d["warnings"])]
     if db.is_paused():
@@ -97,6 +100,7 @@ def evening_report():
         lines += ["", "🧠 <b>Ultime lezioni in memoria</b>"] + [f"• {esc(l)}" for l in new_lessons]
     eq = [e["equity"] for e in db.equity_since(_since(24 * 365))]
     lines.append(f"\n📉 Max drawdown storico: {max_drawdown(eq):.2%}")
+    lines += events_block()
     telegram.send("\n".join(lines))
 
 
@@ -112,12 +116,49 @@ def weekly_report():
                      f"media {s['avg_r']:+.2f}R · P&L {s['pnl']:+,.2f}$")
     if alltime["n"]:
         lines.append(f"Dall'inizio: {alltime['n']} op · win {alltime['win_rate']:.0%} · PF {alltime['profit_factor']:.2f}")
+    lines += shadow_block(_since(24 * 7)) + shadow_block("1970", "dall'inizio")
     lines += ["", "✅ <b>Checklist passaggio al conto reale</b>"]
     checks = go_live_readiness(db.closed_trades(limit=10000), db.equity_since("1970-01-01"))
     lines += [f"{'✅' if ok else '⬜'} {esc(txt)}" for txt, ok in checks]
     lines.append("\n" + ("🚀 Tutti i criteri soddisfatti: si può valutare il reale con capitale ridotto."
                          if all(ok for _, ok in checks) else "Restiamo in demo finché tutti i criteri non sono verdi."))
     telegram.send("\n".join(lines))
+
+
+def events_block() -> list[str]:
+    ev = macro.upcoming_events(36, CFG)
+    if not ev:
+        return []
+    return ["", "📅 <b>Eventi macro in arrivo</b> (ingressi in pausa a ridosso)"] + [
+        f"• {e['ts'].astimezone().strftime('%a %d %H:%M')} {esc(e['country'])} {esc(e['title'])}" for e in ev]
+
+
+def shadow_block(since: str, label: str = "settimana") -> list[str]:
+    rows = db.shadow_closed(since)
+    if not rows:
+        return []
+    real = trade_stats(db.closed_trades(since_iso=since, limit=10000))
+    out = ["", f"🧪 <b>Strategie ombra vs reale ({label})</b>",
+           f"• <b>reale</b>: {real.get('n', 0)} op · " + (f"{real['avg_r']:+.2f}R medio · PF {real['profit_factor']:.2f}" if real.get("n") else "—")]
+    for v in sorted({r["variant"] for r in rows}):
+        st = trade_stats([r for r in rows if r["variant"] == v])
+        out.append(f"• {esc(v)}: {st['n']} op · {st['avg_r']:+.2f}R medio · PF {st['profit_factor']:.2f}")
+    return out
+
+
+def watchdog():
+    """Se il Trader non dà segni di vita da 20 minuti (PC spento, crash, rete) avvisa."""
+    hb = db.kv_get("heartbeat")
+    if not hb:
+        return
+    late = (datetime.now(timezone.utc) - datetime.fromisoformat(hb)).total_seconds() / 60
+    if late > 20 and not db.kv_get("watchdog_alerted"):
+        db.kv_set("watchdog_alerted", True)
+        telegram.send(f"🚨 <b>Il bot Trader non risponde da {late:.0f} minuti.</b>\n"
+                      "Controlla che il PC/VPS sia acceso e i bot attivi. Gli stop di emergenza sul broker restano attivi.")
+    elif late <= 20 and db.kv_get("watchdog_alerted"):
+        db.kv_set("watchdog_alerted", False)
+        telegram.send("✅ Bot Trader di nuovo operativo.")
 
 
 def flush_events():
@@ -144,6 +185,8 @@ def handle_command(text: str):
     elif cmd == "/lezioni":
         ls = db.recent_lessons(15)
         telegram.send("🧠 <b>Lezioni in memoria</b>\n" + ("\n".join(f"• {esc(l)}" for l in ls) or "ancora nessuna"))
+    elif cmd == "/check":
+        telegram.send("🩺 <b>Diagnostica</b>\n" + "\n".join(f"{'✅' if ok else '❌'} {esc(n)}: {esc(d)}" for n, ok, d in run_checks()))
     elif cmd == "/pausa":
         db.kv_set("paused", True)
         telegram.send("⏸ Nuovi ingressi sospesi. Le posizioni aperte restano gestite (stop attivi).")
@@ -152,7 +195,7 @@ def handle_command(text: str):
         db.kv_set("cooldown_until", 0)
         telegram.send("▶️ Bot riattivato.")
     else:
-        telegram.send("Comandi: /status /piano /report /settimana /lezioni /pausa /riprendi")
+        telegram.send("Comandi: /status /piano /report /settimana /lezioni /check /pausa /riprendi")
 
 
 def main():
@@ -164,6 +207,7 @@ def main():
     sch.add_job(evening_report, "cron", hour=int(h), minute=int(m))
     sch.add_job(weekly_report, "cron", day_of_week=CFG["schedule"]["weekly_report_day"], hour=19, minute=0)
     sch.add_job(flush_events, "interval", seconds=20, max_instances=1, coalesce=True)
+    sch.add_job(watchdog, "interval", minutes=5, max_instances=1, coalesce=True)
     sch.start()
     log.info("Reporter avviato")
     offset = None

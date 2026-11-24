@@ -53,9 +53,26 @@ def circuit_breaker(equity: float, cfg: dict) -> dict:
     if len(last) == rk["losing_streak_cooldown"] and all((t["pnl"] or 0) < 0 for t in last):
         if not db.kv_get(f"cooldown_for_{last[0]['id']}"):
             db.kv_set(f"cooldown_for_{last[0]['id']}", True)
-            db.kv_set("cooldown_until", (now + timedelta(hours=24)).timestamp())
-            out["reasons"].append(f"{len(last)} perdite consecutive → pausa 24h (anti revenge-trading)")
+            hrs = rk.get("losing_streak_cooldown_hours", 8)
+            db.kv_set("cooldown_until", (now + timedelta(hours=hrs)).timestamp())
+            out["reasons"].append(f"{len(last)} perdite consecutive → pausa {hrs}h (anti revenge-trading)")
     if db.cooldown_active():
         out["risk_mult"] = 0.0
         out["state"] = out["state"] if out["state"] in ("kill", "halt_today") else "cooldown"
     return out
+
+
+def vol_scaler(cfg: dict) -> tuple[float, float | None]:
+    """Volatility targeting sul portafoglio: se la curva dell'equity degli ultimi 7
+    giorni oscilla più del target annuo, riduce il rischio in proporzione."""
+    import numpy as np
+    target = cfg["risk"].get("target_portfolio_vol")
+    rows = db.equity_since((datetime.now(timezone.utc) - timedelta(days=7)).isoformat())
+    if not target or len(rows) < 50:
+        return 1.0, None
+    eq = np.array([r["equity"] for r in rows])
+    ts = [datetime.fromisoformat(r["ts"]) for r in rows]
+    step_min = max((ts[-1] - ts[0]).total_seconds() / 60 / (len(ts) - 1), 1)
+    rets = np.diff(eq) / eq[:-1]
+    vol = float(rets.std() * np.sqrt(365 * 24 * 60 / step_min))
+    return (float(min(1.0, target / vol)) if vol > 0 else 1.0), vol

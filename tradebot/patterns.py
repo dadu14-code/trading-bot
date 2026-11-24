@@ -59,7 +59,19 @@ class AnalogResult:
         return {k: round(v, 4) if isinstance(v, float) else v for k, v in self.__dict__.items()}
 
 
+_analog_cache: dict = {}
+
+
 def analogs(df: pd.DataFrame, k: int = 40, horizon: int = 24, min_history: int = 300) -> AnalogResult | None:
+    key = (len(df), df.index[-1] if len(df) else None, float(df["close"].iloc[-1]) if len(df) else None, k, horizon)
+    if key not in _analog_cache:
+        if len(_analog_cache) > 500:
+            _analog_cache.clear()
+        _analog_cache[key] = _analogs(df, k, horizon, min_history)
+    return _analog_cache[key]
+
+
+def _analogs(df: pd.DataFrame, k: int, horizon: int, min_history: int) -> AnalogResult | None:
     if len(df) < min_history:
         return None
     f = features(df).replace([np.inf, -np.inf], np.nan)

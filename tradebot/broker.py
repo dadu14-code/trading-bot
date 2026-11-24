@@ -13,8 +13,9 @@ from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDa
 from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest, CryptoLatestTradeRequest, StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
+from alpaca.trading.requests import (GetOrdersRequest, MarketOrderRequest, ReplaceOrderRequest,
+                                    StopLimitOrderRequest, StopOrderRequest)
 
 from . import db
 from .config import ENV
@@ -105,8 +106,52 @@ class AlpacaBroker:
     def close(self, symbol: str) -> float:
         if ENV.dry_run:
             return self.last_price(symbol)
+        self.cancel_open_orders(symbol)  # libera la quantità bloccata dallo stop di emergenza
         o = self.trading.close_position(norm(symbol))
         return self._wait_fill(o.id, symbol)
+
+    # ── stop di emergenza lato broker ─────────────────────────────
+    def place_backup_stop(self, symbol: str, qty: float, stop: float) -> str | None:
+        """Ordine di stop che vive sul server del broker: scatta anche se il bot è spento."""
+        if ENV.dry_run:
+            return None
+        try:
+            if is_crypto(symbol):  # le crypto su Alpaca accettano stop-limit, non stop a mercato
+                req = StopLimitOrderRequest(symbol=symbol, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.GTC,
+                                            stop_price=round(stop, 2), limit_price=round(stop * 0.97, 2))
+            else:
+                req = StopOrderRequest(symbol=symbol, qty=int(qty), side=OrderSide.SELL, time_in_force=TimeInForce.GTC,
+                                       stop_price=round(stop, 2))
+            return str(self.trading.submit_order(req).id)
+        except Exception as e:
+            log.warning("stop di emergenza %s non piazzato: %s", symbol, e)
+            return None
+
+    def move_backup_stop(self, order_id: str, symbol: str, stop: float) -> str | None:
+        if ENV.dry_run or not order_id:
+            return order_id
+        try:
+            lim = round(stop * 0.97, 2) if is_crypto(symbol) else None
+            return str(self.trading.replace_order_by_id(order_id, ReplaceOrderRequest(stop_price=round(stop, 2), limit_price=lim)).id)
+        except Exception as e:
+            log.warning("spostamento stop di emergenza %s fallito: %s", symbol, e)
+            return order_id
+
+    def order_filled(self, order_id: str | None) -> float | None:
+        if ENV.dry_run or not order_id:
+            return None
+        try:
+            o = self.trading.get_order_by_id(order_id)
+            return float(o.filled_avg_price) if o.filled_avg_price else None
+        except Exception:
+            return None
+
+    def cancel_open_orders(self, symbol: str):
+        try:
+            for o in self.trading.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])):
+                self.trading.cancel_order_by_id(o.id)
+        except Exception as e:
+            log.warning("cancellazione ordini %s: %s", symbol, e)
 
     def _wait_fill(self, order_id, symbol: str, timeout: int = 30) -> float:
         for _ in range(timeout):

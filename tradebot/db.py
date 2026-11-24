@@ -32,7 +32,12 @@ CREATE TABLE IF NOT EXISTS equity(
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY, ts TEXT, kind TEXT, text TEXT, sent INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS shadow_trades(
+  id INTEGER PRIMARY KEY, variant TEXT, symbol TEXT, qty REAL, entry_price REAL, entry_ts TEXT,
+  stop REAL, initial_stop REAL, highest REAL, lowest REAL,
+  exit_price REAL, exit_ts TEXT, exit_reason TEXT, pnl REAL, r_multiple REAL, status TEXT DEFAULT 'open');
 """
+MIGRATIONS = ["ALTER TABLE trades ADD COLUMN backup_order_id TEXT"]
 
 
 def now_iso() -> str:
@@ -54,6 +59,32 @@ def conn(path: str | None = None):
 def init(path: str | None = None):
     with conn(path) as c:
         c.executescript(SCHEMA)
+        for m in MIGRATIONS:  # aggiornamenti dello schema su DB già esistenti
+            try:
+                c.execute(m)
+            except sqlite3.OperationalError:
+                pass
+
+
+# ── strategie ombra ──────────────────────────────────────────────
+def shadow_open(variant: str):
+    with conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM shadow_trades WHERE status='open' AND variant=?", (variant,))]
+
+
+def shadow_insert(**kw):
+    with conn() as c:
+        c.execute(f"INSERT INTO shadow_trades({','.join(kw)}) VALUES({','.join('?' * len(kw))})", tuple(kw.values()))
+
+
+def shadow_update(tid: int, **kw):
+    with conn() as c:
+        c.execute(f"UPDATE shadow_trades SET {','.join(f'{k}=?' for k in kw)} WHERE id=?", (*kw.values(), tid))
+
+
+def shadow_closed(since_iso: str = "1970"):
+    with conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM shadow_trades WHERE status='closed' AND exit_ts>=?", (since_iso,))]
 
 
 # ── key/value ────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ Ogni mattina: postmortem delle operazioni chiuse → nuove lezioni in memoria.
 """
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from tradebot import db, patterns, regime, risk
+from tradebot import db, macro, patterns, regime, risk
 from tradebot.broker import AlpacaBroker
 from tradebot.config import ENV, load_settings, setup_logging
 from tradebot.llm import SeniorTrader
@@ -57,6 +57,8 @@ def review():
     cb = risk.circuit_breaker(acct["equity"], CFG)
     ctx = {"account": acct, "circuit_breaker": cb, "positions": broker.positions(),
            "open_trades": db.open_trades(), "recent_closed_trades": db.closed_trades(limit=15),
+           "macro_and_sentiment": macro.snapshot(CFG),
+           "portfolio_vol_7d": risk.vol_scaler(CFG)[1],
            "lessons_from_past": db.recent_lessons(25), "markets": snap,
            "previous_directive": {k: v for k, v in (db.latest_directive() or {}).items() if k in ("market_view", "risk_posture")},
            "risk_limits": CFG["risk"]}

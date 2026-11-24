@@ -21,7 +21,13 @@ risk:
   daily_loss_halt_pct: 3.0     # stop nuovi ingressi per oggi
   weekly_loss_derisk_pct: 6.0  # dimezza il rischio
   max_drawdown_kill_pct: 15.0  # chiude tutto e mette in pausa
-  losing_streak_cooldown: 3    # N perdite di fila → pausa 24h sui nuovi ingressi
+  losing_streak_cooldown: 3    # N perdite di fila → pausa sui nuovi ingressi…
+  losing_streak_cooldown_hours: 8   # …per 8 ore
+  # Volatility targeting: se il portafoglio oscilla più del target, il rischio scala giù
+  target_portfolio_vol: 0.25   # 25% annualizzato
+  # Stop di emergenza lato broker: protegge se il PC/VPS si spegne o il prezzo crolla di colpo
+  broker_backup_stop: true
+  backup_stop_extra_atr: 1.0   # piazzato 1 ATR sotto lo stop software
 
 signals:
   entry_threshold: 0.55        # punteggio composito minimo (0..1) per entrare
@@ -29,6 +35,20 @@ signals:
   analog_k: 40                 # n. situazioni storiche più simili da confrontare
   analog_horizon_bars: 24      # orizzonte di uscita delle analogie (barre 1H)
   analog_min_winrate: 0.52
+
+macro:
+  # Nessun nuovo ingresso a ridosso di eventi USA ad alto impatto (FOMC, CPI, NFP…)
+  blackout_before_min: 120
+  blackout_after_min: 60
+  currencies: ["USD"]
+
+# Strategie "ombra": girano in parallelo SOLO in simulazione sugli stessi dati.
+# Il report settimanale le confronta con quella reale: se una batte stabilmente
+# la principale, la si promuove copiandone i parametri sopra.
+shadow_variants:
+  prudente:   {signals: {entry_threshold: 0.62}, risk: {atr_stop_mult: 2.5}}
+  aggressiva: {signals: {entry_threshold: 0.50, analog_min_winrate: 0.50}}
+  trend_lungo: {risk: {atr_trail_mult: 4.0, time_stop_bars_4h: 60}}
 
 schedule:
   trader_every_minutes: 5

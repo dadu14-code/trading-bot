@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT / ".env")  # sul PC legge .env; in Docker le variabili arrivano già da compose
 
 
 def _bool(v: str | None, default=False) -> bool:
@@ -24,7 +26,7 @@ class Env:
     tg_chat: str = os.getenv("TELEGRAM_CHAT_ID", "")
     tz: str = os.getenv("TZ", "Europe/Rome")
     dry_run: bool = _bool(os.getenv("DRY_RUN"), False)
-    db_path: str = os.getenv("DB_PATH", str(ROOT / "data" / "tradebot.db"))
+    db_path: str = os.getenv("DB_PATH") or str(ROOT / "data" / "tradebot.db")
 
 
 ENV = Env()
@@ -37,8 +39,24 @@ def load_settings(path: str | None = None) -> dict:
 
 
 def setup_logging(name: str) -> logging.Logger:
-    logging.basicConfig(
-        level=os.getenv("LOG_LEVEL", "INFO"),
-        format=f"%(asctime)s [{name}] %(levelname)s %(message)s",
-    )
+    import sys
+    from logging.handlers import RotatingFileHandler
+    for stream in (sys.stdout, sys.stderr):  # console Windows: niente crash su emoji/accenti
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    logdir = Path(ENV.db_path).parent / "logs"
+    logdir.mkdir(parents=True, exist_ok=True)
+    fmt = f"%(asctime)s [{name}] %(levelname)s %(message)s"
+    fh = RotatingFileHandler(logdir / f"{name}.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format=fmt,
+                        handlers=[logging.StreamHandler(sys.stdout), fh], force=True)
     return logging.getLogger(name)
+
+
+def deep_merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = deep_merge(base.get(k, {}), v) if isinstance(v, dict) else v
+    return out

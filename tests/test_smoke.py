@@ -51,4 +51,45 @@ def test_circuit_breaker_kill():
 
 def test_backtest_runs():
     res = backtest.run(DF, CFG, warmup=1500)
-    assert "stats" in res and res["final_equity"] > 0
+    assert "stats" in res and res["curve"][-1] > 0
+
+
+def test_cooldown_8h():
+    import time
+    db.init()
+    for i in range(3):
+        tid = db.open_trade(symbol="X", asset_class="crypto", side="long", qty=1, entry_price=100, stop=95)
+        db.update_trade(tid, status="closed", pnl=-5, exit_ts=db.now_iso(), r_multiple=-1)
+    db.kv_set("cooldown_until", 0)
+    cb = risk.circuit_breaker(10_000, CFG)
+    hrs = (db.kv_get("cooldown_until") - time.time()) / 3600
+    assert cb["state"] == "cooldown" and 7.9 < hrs <= 8.0
+    db.kv_set("cooldown_until", 0)
+
+
+def test_macro_blackout(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from tradebot import macro
+    soon = datetime.now(timezone.utc) + timedelta(minutes=30)
+    monkeypatch.setattr(macro, "economic_events", lambda *a, **k: [{"ts": soon, "title": "CPI m/m", "country": "USD"}])
+    assert "CPI" in macro.macro_blackout(CFG)
+    later = datetime.now(timezone.utc) + timedelta(hours=5)
+    monkeypatch.setattr(macro, "economic_events", lambda *a, **k: [{"ts": later, "title": "CPI m/m", "country": "USD"}])
+    assert macro.macro_blackout(CFG) is None
+
+
+def test_vol_scaler_and_merge():
+    from tradebot.config import deep_merge
+    m = deep_merge(CFG, {"risk": {"atr_stop_mult": 9}})
+    assert m["risk"]["atr_stop_mult"] == 9 and m["risk"]["max_open_positions"] == CFG["risk"]["max_open_positions"]
+    mult, _ = risk.vol_scaler(CFG)
+    assert 0 < mult <= 1
+
+
+def test_walk_forward_small():
+    from tradebot import optimize
+    optimize.GRID = {"entry_threshold": [0.5, 0.6], "analog_min_winrate": [0.5], "atr_stop_mult": [2.0],
+                     "atr_trail_mult": [3.0], "time_stop_bars_4h": [30]}
+    pre = backtest.precompute(DF, CFG, warmup=1500)
+    res = optimize.walk_forward([(pre, 0.0025)], backtest.params_from(CFG), folds=2)
+    assert len(res["folds"]) == 2 and "suggested" in res
