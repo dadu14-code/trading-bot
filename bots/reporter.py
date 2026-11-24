@@ -25,7 +25,8 @@ require_keys(log)
 broker = AlpacaBroker()
 esc = lambda s: html.escape(str(s))
 GIORNI = ["lun", "mar", "mer", "gio", "ven", "sab", "dom"]
-BIAS = {"long": "🟢 long", "flat": "⚪ flat", "exit": "🔴 uscire"}
+BIAS = {"long": "🟢 long", "short": "🟣 short", "flat": "⚪ flat", "exit": "🔴 uscire"}
+STRAT = {"trend": "trend", "short": "short", "capitulation": "rimbalzo"}
 
 
 def _since(hours: int) -> str:
@@ -40,10 +41,12 @@ def positions_block() -> str:
     lines = []
     for sym, p in pos.items():
         t = trades.get(sym)
-        pct = p["price"] / p["avg_entry"] - 1
+        short = p.get("side") == "short" or p["qty"] < 0
+        pct = (p["price"] / p["avg_entry"] - 1) * (-1 if short else 1)
         stop = f" · stop {t['stop']:,.4g}" if t else ""
-        lines.append(f"• <b>{sym}</b> {p['qty']:g} @ {p['avg_entry']:,.4g} → {p['price']:,.4g} "
-                     f"({pct:+.2%}, {p['unrealized_pl']:+,.2f}$){stop}")
+        tag = f" [{STRAT.get(t.get('strategy') or 'trend', '')}]" if t else ""
+        lines.append(f"• <b>{sym}</b> {'SHORT' if short else 'LONG'}{tag} {abs(p['qty']):g} @ {p['avg_entry']:,.4g} → "
+                     f"{p['price']:,.4g} ({pct:+.2%}, {p['unrealized_pl']:+,.2f}$){stop}")
     return "\n".join(lines)
 
 
@@ -65,6 +68,8 @@ def morning_report():
              f" <i>({esc(d.get('_source', '-'))})</i>",
              f"<i>{esc(d.get('market_view', ''))}</i>", "", "📋 <b>Piano</b>"]
     lines += [f"• {esc(p)}" for p in d.get("plan_today", [])]
+    if "capitulation_allowed" in d:
+        lines.append(f"🟡 Rimbalzi da capitolazione: {'consentiti' if d['capitulation_allowed'] else 'vietati'}")
     lines += ["", "🎯 <b>Bias per asset</b>"]
     for s in d.get("symbols", []):
         lines.append(f"• <b>{esc(s['symbol'])}</b> {BIAS.get(s['bias'], s['bias'])} · conv {s['conviction']:.0%} · "
@@ -87,9 +92,11 @@ def evening_report():
     lines.append(f"🔵 Aperte: {len(opened)}   ✅ Chiuse: {len(closed)}" +
                  (f"   P&L realizzato: <b>{st['pnl']:+,.2f}$</b> (win {st['win_rate']:.0%})" if closed else ""))
     for t in opened:
-        lines.append(f"• ➕ {esc(t['symbol'])} @ {t['entry_price']:,.4g} — <i>{esc(t['rationale'][:220])}</i>")
+        lines.append(f"• ➕ {esc(t['symbol'])} {(t.get('side') or 'long').upper()} [{STRAT.get(t.get('strategy') or 'trend')}] "
+                     f"@ {t['entry_price']:,.4g} — <i>{esc(t['rationale'][:220])}</i>")
     for t in closed:
-        lines.append(f"• ➖ {esc(t['symbol'])} {t['pnl']:+,.2f}$ ({(t['r_multiple'] or 0):+.2f}R) — {esc(t['exit_reason'])}")
+        lines.append(f"• ➖ {esc(t['symbol'])} [{STRAT.get(t.get('strategy') or 'trend')}] {t['pnl']:+,.2f}$ "
+                     f"({(t['r_multiple'] or 0):+.2f}R) — {esc(t['exit_reason'])}")
     if not opened and not closed:
         lines.append("Nessuna operazione: il mercato non offriva setup con vantaggio sufficiente. "
                      "Anche non fare nulla è una decisione.")
@@ -98,8 +105,11 @@ def evening_report():
     for sym in CFG["universe"]["crypto"] + CFG["universe"]["stocks"]:
         e = db.kv_get(f"last_eval:{sym}")
         if e:
-            why = "SEGNALE OK" if e["go"] else "; ".join(e["vetoes"]) or "punteggio sotto soglia"
-            lines.append(f"• {sym}: {e['score']:.2f} — {esc(why)}")
+            parts = []
+            for strat, v in (e.get("all") or {e.get("strategy", "trend"): e}).items():
+                why = "✅ SEGNALE" if v["go"] else ("; ".join(v["vetoes"][:1]) or "sotto soglia")
+                parts.append(f"{STRAT.get(strat, strat)} {v['score']:.2f} ({esc(why)})")
+            lines.append(f"• <b>{sym}</b>: " + " · ".join(parts))
     lines += ["", "📂 <b>Posizioni aperte</b>", positions_block()]
     pm = db.kv_get("last_postmortem")
     new_lessons = db.recent_lessons(3)
@@ -123,6 +133,12 @@ def weekly_report():
                      f"media {s['avg_r']:+.2f}R · P&L {s['pnl']:+,.2f}$")
     if alltime["n"]:
         lines.append(f"Dall'inizio: {alltime['n']} op · win {alltime['win_rate']:.0%} · PF {alltime['profit_factor']:.2f}")
+        everything = db.closed_trades(limit=10000)
+        for strat in ("trend", "short", "capitulation"):
+            st = trade_stats([t for t in everything if (t.get("strategy") or "trend") == strat])
+            if st["n"]:
+                lines.append(f"  · {STRAT[strat]}: {st['n']} op · win {st['win_rate']:.0%} · {st['avg_r']:+.2f}R medio · "
+                             f"PF {st['profit_factor']:.2f}")
     lines += shadow_block(_since(24 * 7)) + shadow_block("1970", "dall'inizio")
     lines += ["", "✅ <b>Checklist passaggio al conto reale</b>"]
     checks = go_live_readiness(db.closed_trades(limit=10000), db.equity_since("1970-01-01"))

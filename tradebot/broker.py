@@ -56,14 +56,17 @@ class AlpacaBroker:
             out = {}
             for t in db.open_trades():
                 px = self.last_price(t["symbol"])
-                out[norm(t["symbol"])] = {"qty": t["qty"], "avg_entry": t["entry_price"], "price": px,
+                sgn = -1 if t.get("side") == "short" else 1
+                out[norm(t["symbol"])] = {"qty": sgn * t["qty"], "avg_entry": t["entry_price"], "price": px,
                                           "market_value": t["qty"] * px,
-                                          "unrealized_pl": (px - t["entry_price"]) * t["qty"],
-                                          "crypto": is_crypto(t["symbol"])}
+                                          "unrealized_pl": sgn * (px - t["entry_price"]) * t["qty"],
+                                          "crypto": is_crypto(t["symbol"]), "side": "short" if sgn < 0 else "long"}
             return out
+        # market_value sempre positivo (esposizione lorda); gli short hanno qty negativa
         return {p.symbol: {"qty": float(p.qty), "avg_entry": float(p.avg_entry_price),
-                           "price": float(p.current_price), "market_value": float(p.market_value),
-                           "unrealized_pl": float(p.unrealized_pl), "crypto": p.asset_class.value == "crypto"}
+                           "price": float(p.current_price), "market_value": abs(float(p.market_value)),
+                           "unrealized_pl": float(p.unrealized_pl), "crypto": p.asset_class.value == "crypto",
+                           "side": "short" if float(p.qty) < 0 else "long"}
                 for p in self.trading.get_all_positions()}
 
     def market_open(self) -> bool:
@@ -103,6 +106,24 @@ class AlpacaBroker:
         o = self.trading.submit_order(MarketOrderRequest(symbol=symbol, qty=qty, side=OrderSide.BUY, time_in_force=tif))
         return self._wait_fill(o.id, symbol)
 
+    def can_short(self, symbol: str) -> bool:
+        if ENV.dry_run:
+            return True
+        try:
+            a = self.trading.get_asset(symbol)
+            return bool(a.shortable and a.easy_to_borrow)
+        except Exception as e:
+            log.warning("verifica shortabilità %s: %s", symbol, e)
+            return False
+
+    def sell_short(self, symbol: str, qty: int) -> float:
+        """Vendita allo scoperto a mercato (solo azioni/ETF, quantità intere)."""
+        if ENV.dry_run:
+            return self.last_price(symbol)
+        o = self.trading.submit_order(MarketOrderRequest(symbol=symbol, qty=int(qty), side=OrderSide.SELL,
+                                                         time_in_force=TimeInForce.DAY))
+        return self._wait_fill(o.id, symbol)
+
     def close(self, symbol: str) -> float:
         if ENV.dry_run:
             return self.last_price(symbol)
@@ -111,12 +132,16 @@ class AlpacaBroker:
         return self._wait_fill(o.id, symbol)
 
     # ── stop di emergenza lato broker ─────────────────────────────
-    def place_backup_stop(self, symbol: str, qty: float, stop: float) -> str | None:
-        """Ordine di stop che vive sul server del broker: scatta anche se il bot è spento."""
+    def place_backup_stop(self, symbol: str, qty: float, stop: float, side: str = "long") -> str | None:
+        """Ordine di stop che vive sul server del broker: scatta anche se il bot è spento.
+        Long → stop di vendita sotto il prezzo; short → stop di acquisto sopra il prezzo."""
         if ENV.dry_run:
             return None
         try:
-            if is_crypto(symbol):  # le crypto su Alpaca accettano stop-limit, non stop a mercato
+            if side == "short":
+                req = StopOrderRequest(symbol=symbol, qty=int(qty), side=OrderSide.BUY, time_in_force=TimeInForce.GTC,
+                                       stop_price=round(stop, 2))
+            elif is_crypto(symbol):  # le crypto su Alpaca accettano stop-limit, non stop a mercato
                 req = StopLimitOrderRequest(symbol=symbol, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.GTC,
                                             stop_price=round(stop, 2), limit_price=round(stop * 0.97, 2))
             else:

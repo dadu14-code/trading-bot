@@ -36,6 +36,29 @@ signals:
   analog_horizon_bars: 24      # orizzonte di uscita delle analogie (barre 1H)
   analog_min_winrate: 0.52
 
+# SHORT sugli ETF (Alpaca non permette short sulle crypto). Vende i rimbalzi falliti
+# in trend ribassista; serve il bias "short" esplicito del bot Strategia.
+shorts:
+  enabled: true
+  symbols: ["SPY", "QQQ", "GLD"]
+  risk_mult: 0.75            # gli short rischiano squeeze: size ridotta del 25%
+  entry_threshold: 0.58
+  atr_stop_mult: 2.0
+  atr_trail_mult: 2.5
+
+# RIMBALZO da capitolazione: crollo esteso + volume climax + prima inversione.
+# Opera anche contro il trend primario, quindi rischio piccolo e uscita rapida.
+capitulation:
+  enabled: true
+  risk_pct: 0.25             # % equity rischiata (un terzo di un trade normale)
+  max_open: 1                # al massimo un rimbalzo aperto alla volta
+  min_score: 0.85
+  max_fear_greed: 20         # crypto: serve paura estrema
+  stop_buffer_atr: 0.5       # stop sotto il minimo della capitolazione
+  target_r: 1.5              # obiettivo: +1,5 volte il rischio
+  time_stop_bars_4h: 12      # 2 giorni al massimo
+  cooldown_hours: 48         # dopo un rimbalzo, niente altri sullo stesso asset per 48h
+
 macro:
   # Nessun nuovo ingresso a ridosso di eventi USA ad alto impatto (FOMC, CPI, NFP…)
   blackout_before_min: 120

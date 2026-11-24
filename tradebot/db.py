@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS shadow_trades(
   stop REAL, initial_stop REAL, highest REAL, lowest REAL,
   exit_price REAL, exit_ts TEXT, exit_reason TEXT, pnl REAL, r_multiple REAL, status TEXT DEFAULT 'open');
 """
-MIGRATIONS = ["ALTER TABLE trades ADD COLUMN backup_order_id TEXT"]
+MIGRATIONS = ["ALTER TABLE trades ADD COLUMN backup_order_id TEXT",
+              "ALTER TABLE trades ADD COLUMN strategy TEXT DEFAULT 'trend'"]
 
 
 def now_iso() -> str:

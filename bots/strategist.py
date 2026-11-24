@@ -33,7 +33,9 @@ def market_snapshot() -> dict:
                         "short_term_1H": regime.short_term_trigger(b["short"]),
                         "historical_analogs": an.as_dict() if an else None,
                         "candles_1H": patterns.candle_patterns(b["short"]),
-                        "price_levels": regime.price_levels(b["long"], b["medium"])}
+                        "price_levels": regime.price_levels(b["long"], b["medium"]),
+                        "capitulation_check": {k: v for k, v in regime.capitulation(b["long"], b["medium"], b["short"]).items()
+                                               if k not in ("atr_4h",)}}
         except Exception as e:  # un simbolo senza dati non deve fermare tutto
             log.warning("dati %s non disponibili: %s", sym, e)
     return out
@@ -42,13 +44,17 @@ def market_snapshot() -> dict:
 def rule_based_directive(snap: dict) -> dict:
     """Ripiego senza LLM: regole semplici e prudenti."""
     syms = []
+    shortable = CFG.get("shorts", {}).get("symbols", []) if CFG.get("shorts", {}).get("enabled") else []
     for sym, s in snap.items():
         lt, mt = s["long_term_1D"], s["medium_term_4H"]
-        bias = "exit" if lt["label"] == "BEAR" else "long" if (lt["label"] == "BULL" or mt["score"] > 0.3) else "flat"
+        if lt["label"] == "BEAR":
+            bias = "short" if (sym in shortable and mt["score"] < -0.3) else "flat"
+        else:
+            bias = "long" if (lt["label"] == "BULL" or mt["score"] > 0.3) else "flat"
         syms.append({"symbol": sym, "bias": bias, "conviction": 0.5, "risk_multiplier": 1.0 if lt["label"] == "BULL" else 0.5,
                      "horizon": "swing", "key_levels": "", "reasoning": f"regola: 1D {lt['label']}, 4H {mt['score']:+.2f}"})
     return {"market_view": "Direttiva automatica a regole (Claude non disponibile).", "risk_posture": "defensive",
-            "global_risk_multiplier": 0.7, "symbols": syms, "plan_today": ["Seguire i segnali quantitativi con rischio ridotto."],
+            "global_risk_multiplier": 0.7, "capitulation_allowed": True, "symbols": syms, "plan_today": ["Seguire i segnali quantitativi con rischio ridotto."],
             "warnings": ["LLM non disponibile: uso regole di riserva"]}
 
 
@@ -63,7 +69,7 @@ def review():
            "portfolio_vol_7d": risk.vol_scaler(CFG)[1],
            "lessons_from_past": db.recent_lessons(25), "markets": snap,
            "previous_directive": {k: v for k, v in (db.latest_directive() or {}).items() if k in ("market_view", "risk_posture")},
-           "risk_limits": CFG["risk"]}
+           "risk_limits": CFG["risk"], "shorts": CFG.get("shorts"), "capitulation": CFG.get("capitulation")}
     log.info("dati raccolti per %d asset, chiedo a Claude (%s)…", len(snap), "attivo" if senior.enabled else "chiave assente")
     d = senior.strategy_review(ctx)
     src = "claude"

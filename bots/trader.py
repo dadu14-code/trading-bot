@@ -4,8 +4,8 @@ Ciclo:
   1. stato del conto + circuit breaker (kill switch se drawdown eccessivo)
   2. gestione delle posizioni aperte: trailing stop (software + emergenza sul broker),
      uscite per trend/direttiva/tempo
-  3. nuovi ingressi: crypto sempre, azioni/ETF solo a mercato aperto,
-     mai a ridosso di eventi macro ad alto impatto
+  3. nuovi ingressi con tre strategie (trend long, short ETF, rimbalzo da capitolazione):
+     crypto sempre, azioni/ETF solo a mercato aperto, mai a ridosso di eventi macro
   4. strategie ombra: varianti simulate sugli stessi dati, per confronto
 """
 import traceback
@@ -34,13 +34,23 @@ def directive_for(sym: str) -> tuple[dict | None, float]:
     return next((s for s in d.get("symbols", []) if s["symbol"] == sym), None), g
 
 
+ICON = {"trend": "🔵", "short": "🟣", "capitulation": "🟡"}
+LABEL = {"trend": "LONG", "short": "SHORT", "capitulation": "RIMBALZO"}
+
+
 def record_close(t: dict, px: float, reason: str):
-    pnl = (px - t["entry_price"]) * t["qty"]
-    r = (px - t["entry_price"]) / (t["entry_price"] - t["initial_stop"]) if t["entry_price"] > t["initial_stop"] else 0
+    sgn = -1 if t.get("side") == "short" else 1
+    pnl = sgn * (px - t["entry_price"]) * t["qty"]
+    one_r = abs(t["entry_price"] - t["initial_stop"])
+    r = sgn * (px - t["entry_price"]) / one_r if one_r > 0 else 0
     db.update_trade(t["id"], exit_price=px, exit_ts=db.now_iso(), exit_reason=reason, pnl=pnl, r_multiple=r, status="closed")
-    db.event("trade", f"{'🟢' if pnl >= 0 else '🔴'} <b>CHIUSO {t['symbol']}</b> @ {px:,.4g}\n"
-                      f"P&L {pnl:+,.2f}$ ({r:+.2f}R) · motivo: {reason}")
-    log.info("chiuso %s pnl=%.2f motivo=%s", t["symbol"], pnl, reason)
+    if t.get("strategy") == "capitulation":
+        db.kv_set(f"cap_cooldown:{t['symbol']}", datetime.now(timezone.utc).timestamp()
+                  + CFG["capitulation"].get("cooldown_hours", 48) * 3600)
+    db.kv_set(f"backup_level:{t['id']}", None)
+    db.event("trade", f"{'🟢' if pnl >= 0 else '🔴'} <b>CHIUSO {LABEL.get(t.get('strategy') or 'trend', '')} {t['symbol']}</b>"
+                      f" @ {px:,.4g}\nP&L {pnl:+,.2f}$ ({r:+.2f}R) · motivo: {reason}")
+    log.info("chiuso %s %s pnl=%.2f motivo=%s", t.get("side"), t["symbol"], pnl, reason)
 
 
 def close_trade(t: dict, reason: str):
@@ -51,6 +61,7 @@ def manage_open(positions: dict):
     rk = CFG["risk"]
     for t in db.open_trades():
         sym = t["symbol"]
+        short = t.get("side") == "short"
         if norm(sym) not in positions:   # chiusa fuori dal ciclo: stop d'emergenza, manuale o broker
             filled = broker.order_filled(t.get("backup_order_id"))
             record_close(t, filled or broker.last_price(sym),
@@ -69,16 +80,28 @@ def manage_open(positions: dict):
             db.update_trade(t["id"], **upd)
             close_trade({**t, **upd}, reason)
             continue
-        if new_stop > t["stop"] * 1.002:
-            log.info("%s stop alzato %.4g → %.4g", sym, t["stop"], new_stop)
+        moved = (t["stop"] - new_stop) if short else (new_stop - t["stop"])
+        if moved > abs(t["stop"]) * 0.002:
+            log.info("%s stop spostato %.4g → %.4g", sym, t["stop"], new_stop)
             # lo stop di emergenza segue a distanza di sicurezza (sposta solo se guadagna ≥ 1 ATR)
             if rk.get("broker_backup_stop") and t.get("backup_order_id"):
-                bk = new_stop - rk["backup_stop_extra_atr"] * atr4
-                cur = db.kv_get(f"backup_level:{t['id']}", t["initial_stop"] - rk["backup_stop_extra_atr"] * atr4)
-                if bk - cur >= atr4:
+                gap = rk["backup_stop_extra_atr"] * atr4 * (-1 if short else 1)
+                bk = new_stop - gap
+                cur = db.kv_get(f"backup_level:{t['id']}") or (t["initial_stop"] - gap)
+                if (cur - bk if short else bk - cur) >= atr4:
                     upd["backup_order_id"] = broker.move_backup_stop(t["backup_order_id"], sym, bk)
                     db.kv_set(f"backup_level:{t['id']}", bk)
         db.update_trade(t["id"], **upd)
+
+
+def size_mult(ev: dict, dsym: dict | None, gmult: float, cb: dict, vmult: float) -> float:
+    base = cb["risk_mult"] * gmult * vmult
+    if ev["strategy"] == "capitulation":       # rischio fisso e piccolo, indipendente dalla convinzione
+        return cb["risk_mult"] * vmult * CFG["capitulation"]["risk_pct"] / CFG["risk"]["risk_per_trade_pct"]
+    conv = dsym["risk_multiplier"] * (0.5 + dsym["conviction"]) if dsym else 0.5
+    if ev["strategy"] == "short":
+        conv *= CFG["shorts"].get("risk_mult", 0.75)
+    return base * conv
 
 
 def look_for_entries(acct: dict, positions: dict, cb: dict, evals: dict):
@@ -94,37 +117,63 @@ def look_for_entries(acct: dict, positions: dict, cb: dict, evals: dict):
     vmult, pvol = risk.vol_scaler(CFG)
     exposure = sum(p["market_value"] for p in positions.values())
     crypto_exp = sum(p["market_value"] for p in positions.values() if p["crypto"])
-    for sym, (ev, dsym, gmult) in evals.items():
-        if norm(sym) in positions or not ev["go"]:
+    caps_open = sum(1 for t in db.open_trades() if t.get("strategy") == "capitulation")
+    for sym, (cands, dsym, gmult) in evals.items():
+        if norm(sym) in positions or len(positions) >= rk["max_open_positions"]:
+            continue
+        ev = next((e for e in cands if e["go"]), None)
+        if not ev:
+            continue
+        if ev["strategy"] == "capitulation" and caps_open >= CFG["capitulation"].get("max_open", 1):
+            continue
+        if ev["side"] == "short" and not broker.can_short(sym):
+            log.info("%s non shortabile in questo momento", sym)
             continue
         price = broker.last_price(sym)
-        stop = price - rk["atr_stop_mult"] * ev["atr_4h"]
-        mult = cb["risk_mult"] * gmult * vmult * (dsym["risk_multiplier"] * (0.5 + dsym["conviction"]) if dsym else 0.5)
-        qty, why = risk.position_size(acct["equity"], price, stop, mult, CFG, exposure, crypto_exp, is_crypto(sym))
+        stop = signals.initial_stop(ev, price, CFG)
+        qty, why = risk.position_size(acct["equity"], price, stop, size_mult(ev, dsym, gmult, cb, vmult),
+                                      CFG, exposure, crypto_exp, is_crypto(sym))
+        if ev["side"] == "short":
+            qty = int(qty)
         if qty <= 0:
-            log.info("%s: segnale ok ma size 0 (%s)", sym, why)
+            log.info("%s: segnale %s ok ma size 0 (%s)", sym, ev["strategy"], why)
             continue
-        fill = broker.buy(sym, qty)
-        stop = fill - rk["atr_stop_mult"] * ev["atr_4h"]
-        backup = (broker.place_backup_stop(sym, qty, stop - rk["backup_stop_extra_atr"] * ev["atr_4h"])
-                  if rk.get("broker_backup_stop") else None)
-        db.open_trade(symbol=sym, asset_class="crypto" if is_crypto(sym) else "stock", side="long", qty=qty,
-                      entry_price=fill, stop=stop, score=ev["composite"], backup_order_id=backup,
-                      rationale=ev["reason"] + (f" | Strategia: {dsym['reasoning']}" if dsym else ""))
+        fill = broker.sell_short(sym, qty) if ev["side"] == "short" else broker.buy(sym, qty)
+        stop = signals.initial_stop(ev, fill, CFG)
+        gap = rk["backup_stop_extra_atr"] * ev["atr_4h"] * (-1 if ev["side"] == "short" else 1)
+        backup = (broker.place_backup_stop(sym, qty, stop - gap, ev["side"]) if rk.get("broker_backup_stop") else None)
+        db.open_trade(symbol=sym, asset_class="crypto" if is_crypto(sym) else "stock", side=ev["side"],
+                      strategy=ev["strategy"], qty=qty, entry_price=fill, stop=stop, score=ev["composite"],
+                      backup_order_id=backup, rationale=ev["reason"] + (f" | Strategia: {dsym['reasoning']}" if dsym else ""))
+        positions[norm(sym)] = {"market_value": qty * fill, "crypto": is_crypto(sym)}
         exposure += qty * fill
         crypto_exp += qty * fill if is_crypto(sym) else 0
-        risk_cash = (fill - stop) * qty
-        db.event("trade", f"🔵 <b>APERTO {sym}</b> {qty:g} @ {fill:,.4g}\n"
-                          f"Stop {stop:,.4g} (rischio {risk_cash:,.2f}$ = {risk_cash / acct['equity']:.2%})"
+        caps_open += ev["strategy"] == "capitulation"
+        risk_cash = abs(fill - stop) * qty
+        target = ""
+        if ev["strategy"] == "capitulation":
+            target = f" · obiettivo {fill + CFG['capitulation']['target_r'] * abs(fill - stop):,.4g}"
+        db.event("trade", f"{ICON[ev['strategy']]} <b>APERTO {LABEL[ev['strategy']]} {sym}</b> {qty:g} @ {fill:,.4g}\n"
+                          f"Stop {stop:,.4g}{target} (rischio {risk_cash:,.2f}$ = {risk_cash / acct['equity']:.2%})"
                           + (" · 🛡 stop emergenza sul broker" if backup else "") +
                           f"\nPunteggio {ev['composite']:.2f} · {ev['reason']}"
                           + (f"\n<i>vol portafoglio {pvol:.0%} → rischio x{vmult:.2f}</i>" if vmult < 1 else ""))
-        log.info("aperto %s qty=%s @ %.4g", sym, qty, fill)
+        log.info("aperto %s %s qty=%s @ %.4g", ev["strategy"], sym, qty, fill)
+
+
+def sentiment_for(sym: str) -> dict:
+    if not is_crypto(sym):
+        return {}
+    fg = macro.fear_greed()
+    return {"fear_greed": fg["today"] if fg else None, "funding": macro.funding_rate(sym)}
 
 
 def evaluate_universe() -> tuple[dict, dict]:
-    """Scarica i dati una volta sola e valuta ogni simbolo. Ritorna (valutazioni, barre)."""
+    """Scarica i dati una volta sola e valuta ogni simbolo con tutte le strategie.
+    Ritorna ({sym: ([valutazioni in ordine di priorità], dsym, gmult)}, barre)."""
     evals, all_bars, stocks_open = {}, {}, None
+    directive = db.latest_directive()
+    now = datetime.now(timezone.utc).timestamp()
     for sym in UNIVERSE:
         if not is_crypto(sym):
             stocks_open = broker.market_open() if stocks_open is None else stocks_open
@@ -136,10 +185,21 @@ def evaluate_universe() -> tuple[dict, dict]:
             log.warning("dati %s: %s", sym, e)
             continue
         dsym, gmult = directive_for(sym)
-        ev = signals.evaluate_entry(sym, bars, dsym, CFG)
-        db.kv_set(f"last_eval:{sym}", {"ts": db.now_iso(), "go": ev["go"], "score": ev["composite"],
-                                       "vetoes": ev["vetoes"], "reason": ev["reason"]})
-        evals[sym], all_bars[sym] = (ev, dsym, gmult), bars
+        cands = [signals.evaluate_entry(sym, bars, dsym, CFG)]
+        if CFG.get("shorts", {}).get("enabled") and sym in CFG["shorts"].get("symbols", []):
+            cands.append(signals.evaluate_short(sym, bars, dsym, CFG))
+        if CFG.get("capitulation", {}).get("enabled"):
+            cap = signals.evaluate_capitulation(sym, bars, dsym, directive, sentiment_for(sym), CFG)
+            if now < (db.kv_get(f"cap_cooldown:{sym}") or 0):
+                cap["go"] = False
+                cap["vetoes"].append("pausa dopo il rimbalzo precedente")
+            cands.append(cap)
+        best = next((e for e in cands if e["go"]), max(cands, key=lambda e: e["composite"]))
+        db.kv_set(f"last_eval:{sym}", {"ts": db.now_iso(), "go": best["go"], "score": best["composite"],
+                                       "strategy": best["strategy"], "vetoes": best["vetoes"], "reason": best["reason"],
+                                       "all": {e["strategy"]: {"go": e["go"], "score": e["composite"],
+                                                               "vetoes": e["vetoes"][:2]} for e in cands}})
+        evals[sym], all_bars[sym] = (cands, dsym, gmult), bars
     return evals, all_bars
 
 
@@ -170,7 +230,7 @@ def run_shadows(all_bars: dict, equity: float):
         for sym, b in all_bars.items():
             if sym in open_syms or len(open_syms) >= rk["max_open_positions"]:
                 continue
-            ev = signals.evaluate_entry(sym, b, directive_for(sym)[0], vcfg)
+            ev = signals.evaluate_entry(sym, b, directive_for(sym)[0], vcfg)  # le ombre testano il trend long
             if ev["go"]:
                 px = float(b["short"]["close"].iloc[-1])
                 stop = px - rk["atr_stop_mult"] * ev["atr_4h"]

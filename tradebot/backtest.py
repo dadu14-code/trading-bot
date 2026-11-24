@@ -120,6 +120,69 @@ def simulate(pre: dict, params: dict, fee: float = 0.0025, equity0: float = 10_0
             "buy_and_hold": float(bh), "trades": trades, "curve": curve}
 
 
+def run_module(df1h: pd.DataFrame, cfg: dict, strategy: str, fee: float = 0.0025, step: int = 4,
+               warmup: int = 1500, equity0: float = 10_000.0) -> dict:
+    """Backtest di 'short' o 'capitulation' con le STESSE funzioni usate dal bot dal vivo.
+    Il sentiment storico (Fear&Greed, funding) non è disponibile: il rimbalzo viene
+    testato solo su crollo + volume + inversione, quindi in modo più permissivo."""
+    from . import signals
+    cfg = {**cfg, "shorts": {**cfg.get("shorts", {}), "enabled": True, "symbols": ["SIM"]},
+           "capitulation": {**cfg.get("capitulation", {}), "enabled": True}}
+    df4 = df1h.resample("4h").agg(AGG).dropna()
+    df1d = df1h.resample("1D").agg(AGG).dropna()
+    o, h, l, c = (df1h[k].to_numpy() for k in ("open", "high", "low", "close"))
+    idx = df1h.index
+    equity, pos, trades, curve = equity0, None, [], []
+    risk_pct = cfg["capitulation"]["risk_pct"] if strategy == "capitulation" else (
+        cfg["risk"]["risk_per_trade_pct"] * cfg["shorts"].get("risk_mult", 0.75))
+    cooldown_until = None
+    for i in range(warmup, len(df1h)):
+        t = idx[i]
+        if pos:
+            short = pos["side"] == "short"
+            pos["highest"], pos["lowest"] = max(pos["highest"], h[i]), min(pos["lowest"], l[i])
+            px, reason = None, None
+            if (h[i] >= pos["stop"]) if short else (l[i] <= pos["stop"]):
+                px, reason = (max(pos["stop"], o[i]) if short else min(pos["stop"], o[i])), "stop"
+            elif i % step == 0:
+                s4 = df4[df4.index + pd.Timedelta(hours=4) <= t + pd.Timedelta(hours=1)]
+                s1d = df1d[df1d.index + pd.Timedelta(days=1) <= t + pd.Timedelta(hours=1)]
+                lt = regime.long_term(s1d)["label"]
+                reason, pos["stop"] = signals.evaluate_exit(pos, c[i], float(ind.atr(s4).iloc[-1]),
+                                                            (i - pos["i"]) // 4, lt, None, cfg)
+                px = c[i]
+            if reason:
+                sgn = -1 if short else 1
+                pnl = sgn * (px - pos["entry_price"]) * pos["qty"] - fee * (px + pos["entry_price"]) * pos["qty"]
+                equity += pnl
+                trades.append({"pnl": pnl, "r_multiple": sgn * (px - pos["entry_price"]) / abs(pos["entry_price"] - pos["initial_stop"]),
+                               "entry_ts": idx[pos["i"]], "exit_ts": t, "reason": reason})
+                if strategy == "capitulation":
+                    cooldown_until = t + pd.Timedelta(hours=cfg["capitulation"].get("cooldown_hours", 48))
+                pos = None
+        elif i % step == 0 and i + 1 < len(df1h) and (cooldown_until is None or t >= cooldown_until):
+            s4 = df4[df4.index + pd.Timedelta(hours=4) <= t + pd.Timedelta(hours=1)]
+            s1d = df1d[df1d.index + pd.Timedelta(days=1) <= t + pd.Timedelta(hours=1)]
+            if len(s4) < 60 or len(s1d) < 60:
+                curve.append(equity)
+                continue
+            bars = {"short": df1h.iloc[: i + 1], "medium": s4, "long": s1d}
+            ev = (signals.evaluate_short("SIM", bars, None, cfg) if strategy == "short"
+                  else signals.evaluate_capitulation("SIM", bars, None, None, {}, cfg))
+            if ev["go"]:
+                entry = o[i + 1]
+                stop = signals.initial_stop(ev, entry, cfg)
+                qty = min(equity * risk_pct / 100 / abs(entry - stop), equity * cfg["risk"]["max_position_pct"] / 100 / entry)
+                pos = {"side": ev["side"], "strategy": ev["strategy"], "entry_price": entry, "initial_stop": stop,
+                       "stop": stop, "highest": entry, "lowest": entry, "qty": qty, "i": i + 1}
+        mtm = equity
+        if pos:
+            mtm += (-1 if pos["side"] == "short" else 1) * (c[i] - pos["entry_price"]) * pos["qty"]
+        curve.append(mtm)
+    return {"stats": trade_stats(trades), "return": curve[-1] / equity0 - 1 if curve else 0,
+            "max_dd": max_drawdown(curve), "buy_and_hold": float(c[-1] / c[warmup] - 1), "trades": trades}
+
+
 def params_from(cfg: dict) -> dict:
     s, r = cfg["signals"], cfg["risk"]
     return {"entry_threshold": s["entry_threshold"], "analog_min_winrate": s["analog_min_winrate"],
@@ -150,16 +213,23 @@ def main():
     ap.add_argument("--days", type=int, default=730)
     ap.add_argument("--csv")
     ap.add_argument("--synthetic", action="store_true")
+    ap.add_argument("--strategy", choices=["trend", "short", "capitulation", "all"], default="all")
     a = ap.parse_args()
     cfg = load_settings()
     df = load(a.symbol, a.days, a.csv, a.synthetic)
     fee = FEES["crypto" if (a.symbol or "/").find("/") >= 0 else "stock"]
-    res = run(df, cfg, fee=fee)
-    s = res["stats"]
-    print(f"Barre: {len(df)}  Operazioni: {s.get('n', 0)}")
-    if s.get("n"):
-        print(f"Win rate {s['win_rate']:.1%} · PF {s['profit_factor']:.2f} · media {s['avg_r']:+.2f}R")
-    print(f"Rendimento {res['return']:+.2%} · Max DD {res['max_dd']:.2%} · Buy&Hold {res['buy_and_hold']:+.2%}")
+    print(f"Barre: {len(df)}")
+    for strat in (["trend", "short", "capitulation"] if a.strategy == "all" else [a.strategy]):
+        if strat == "short" and a.symbol and "/" in a.symbol:
+            print("short    : non disponibile sulle crypto (Alpaca)")
+            continue
+        res = run(df, cfg, fee=fee) if strat == "trend" else run_module(df, cfg, strat, fee=fee)
+        s = res["stats"]
+        line = f"{strat:13s}: {s.get('n', 0)} op"
+        if s.get("n"):
+            line += f" · win {s['win_rate']:.0%} · PF {s['profit_factor']:.2f} · {s['avg_r']:+.2f}R medio"
+        print(line + f" · rendimento {res['return']:+.2%} · max DD {res['max_dd']:.2%}")
+    print(f"Buy&Hold dello stesso periodo: {df['close'].iloc[-1] / df['close'].iloc[1500] - 1:+.2%}")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ def position_size(equity: float, price: float, stop: float, risk_mult: float, cf
                   current_exposure: float, crypto_exposure: float, is_crypto: bool) -> tuple[float, str]:
     rk = cfg["risk"]
     risk_mult = max(0.0, min(1.5, risk_mult))            # clamp della fiducia dell'LLM
-    per_unit = price - stop
+    per_unit = abs(price - stop)
     if per_unit <= 0 or risk_mult == 0:
         return 0.0, "rischio unitario nullo"
     risk_cash = equity * rk["risk_per_trade_pct"] / 100 * risk_mult

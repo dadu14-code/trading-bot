@@ -15,7 +15,18 @@ log = logging.getLogger(__name__)
 
 SYSTEM = """Sei un trader professionista con oltre 30 anni di esperienza su azioni, materie prime e \
 crypto, sopravvissuto al 1987, al 2000, al 2008, al 2020 e a diversi inverni crypto. Gestisci il \
-lato strategico di un sistema di trading automatico long-only su un conto demo.
+lato strategico di un sistema di trading automatico su un conto demo.
+
+Il sistema ha tre strategie, e tu decidi quali sono ammesse:
+- TREND LONG (tutti gli asset): con bias "long" compra pullback e breakout in trend rialzista.
+- SHORT (solo gli ETF elencati in shorts.symbols; le crypto non si possono shortare): opera SOLO \
+se dai bias "short". Vende i rimbalzi falliti in trend ribassista. Gli short hanno rischio di \
+squeeze: usali solo con trend ribassista chiaro su 1D e 4H.
+- RIMBALZO DA CAPITOLAZIONE (tutti gli asset): piccoli long contro trend dopo un crollo con volumi \
+climax e una prima inversione, rischio 0,25% e uscita entro 2 giorni. Lo abiliti o lo vieti con \
+capitulation_allowed: vietalo quando il crollo ha cause strutturali o è guidato da eventi in corso.
+"flat" blocca trend e short ma non i rimbalzi; "exit" chiude tutto e blocca anche i rimbalzi.
+Nei dati trovi i livelli di prezzo reali (price_levels): usali per i livelli chiave.
 
 Come ragioni:
 - Pensi per orizzonti temporali: il trend primario (giornaliero, mesi) decide la direzione, quello \
@@ -36,11 +47,12 @@ DIRECTIVE_SCHEMA = {
         "market_view": {"type": "string", "description": "Visione d'insieme in 3-5 frasi"},
         "risk_posture": {"type": "string", "enum": ["aggressive", "normal", "defensive", "capital_preservation"]},
         "global_risk_multiplier": {"type": "number", "description": "0.0-1.5, moltiplica il rischio di tutte le operazioni"},
+        "capitulation_allowed": {"type": "boolean", "description": "true se il modulo rimbalzo può operare"},
         "symbols": {"type": "array", "items": {
             "type": "object",
             "properties": {
                 "symbol": {"type": "string"},
-                "bias": {"type": "string", "enum": ["long", "flat", "exit"]},
+                "bias": {"type": "string", "enum": ["long", "short", "flat", "exit"]},
                 "conviction": {"type": "number", "description": "0.0-1.0"},
                 "risk_multiplier": {"type": "number", "description": "0.0-1.5"},
                 "horizon": {"type": "string", "enum": ["short", "swing", "position"]},
@@ -52,7 +64,7 @@ DIRECTIVE_SCHEMA = {
         "plan_today": {"type": "array", "items": {"type": "string"}, "description": "Cosa farà il sistema nelle prossime ore"},
         "warnings": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["market_view", "risk_posture", "global_risk_multiplier", "symbols", "plan_today", "warnings"],
+    "required": ["market_view", "risk_posture", "global_risk_multiplier", "capitulation_allowed", "symbols", "plan_today", "warnings"],
     "additionalProperties": False,
 }
 

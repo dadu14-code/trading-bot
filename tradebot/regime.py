@@ -85,3 +85,45 @@ def price_levels(daily: pd.DataFrame, h4: pd.DataFrame) -> dict:
         "atr_1d": r(ind.atr(daily).iloc[-1]),
         "recent_swing_pivots": [{"type": t, "price": p, "date": d} for t, p, d in piv[:8]],
     }
+
+
+def short_term_trigger_short(df: pd.DataFrame) -> dict:
+    """Specchio del trigger long: rimbalzo che fallisce sotto la media o rottura dei minimi."""
+    c = df["close"]
+    e20 = ind.ema(c, 20)
+    r = ind.rsi(c)
+    dcl = df["low"].rolling(20).min().shift(1)
+    vol_ok = df["volume"].iloc[-1] > 1.3 * df["volume"].rolling(20).mean().iloc[-1]
+    failed_rally = bool(r.iloc[-6:-1].max() > 58 and r.iloc[-1] < r.iloc[-2] and c.iloc[-1] < e20.iloc[-1])
+    breakdown = bool(c.iloc[-1] < dcl.iloc[-1] and vol_ok)
+    oversold = bool(r.iloc[-1] < 22)
+    score = (0.7 if failed_rally else 0) + (0.6 if breakdown else 0) - (0.6 if oversold else 0)
+    return {"score": round(float(np.clip(score, -1, 1)), 3), "failed_rally": failed_rally, "breakdown": breakdown,
+            "oversold": oversold, "rsi": round(float(r.iloc[-1]), 1)}
+
+
+def capitulation(daily: pd.DataFrame, h4: pd.DataFrame, h1: pd.DataFrame) -> dict:
+    """Riconosce una capitolazione: crollo esteso + volume climax + primo segnale di inversione."""
+    a4 = ind.atr(h4)
+    e20 = ind.ema(h4["close"], 20)
+    look = 6                                                  # ultime 6 barre 4H ≈ 24 ore
+    stretch = float(((e20 - h4["low"]) / a4).iloc[-look:].max())        # quanti ATR sotto la media
+    rsi_d = ind.rsi(daily["close"])
+    drop_10d = float(daily["close"].iloc[-1] / daily["high"].iloc[-10:].max() - 1)
+    vol_climax = float((h4["volume"].iloc[-look:] / h4["volume"].rolling(50).mean().iloc[-look:]).max())
+    cap_low = float(h4["low"].iloc[-look:].min())
+    # inversione: candela di rigetto sull'ultima 4H chiusa, o 1H che recupera il massimo precedente
+    last4 = h4.iloc[-2:]
+    body = abs(last4["close"].iloc[-1] - last4["open"].iloc[-1])
+    lower_wick = min(last4["open"].iloc[-1], last4["close"].iloc[-1]) - last4["low"].iloc[-1]
+    hammer4 = bool(lower_wick > 2 * body and last4["close"].iloc[-1] > last4["low"].iloc[-1] + 0.6 * (last4["high"].iloc[-1] - last4["low"].iloc[-1]))
+    engulf4 = bool(last4["close"].iloc[-2] < last4["open"].iloc[-2] and last4["close"].iloc[-1] > last4["open"].iloc[-2])
+    reclaim1 = bool(h1["close"].iloc[-1] > h1["high"].iloc[-4:-1].max() and h1["close"].iloc[-1] > cap_low + float(a4.iloc[-1]) * 0.5)
+    crash = stretch >= 2.5 or float(rsi_d.iloc[-3:].min()) < 25 or drop_10d <= -3 * float(ind.atr(daily).iloc[-1]) / float(daily["close"].iloc[-1])
+    climax = vol_climax >= 2.0
+    reversal = hammer4 or engulf4 or reclaim1
+    return {"crash": bool(crash), "climax_volume": bool(climax), "reversal": bool(reversal),
+            "stretch_atr": round(stretch, 2), "rsi_daily_min3": round(float(rsi_d.iloc[-3:].min()), 1),
+            "drop_from_10d_high": round(drop_10d, 4), "volume_vs_avg": round(vol_climax, 2),
+            "cap_low": cap_low, "atr_4h": float(a4.iloc[-1]),
+            "signals": [n for n, v in (("martello 4H", hammer4), ("engulfing 4H", engulf4), ("recupero 1H", reclaim1)) if v]}
