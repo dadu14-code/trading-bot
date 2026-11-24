@@ -93,6 +93,13 @@ report:
   real_currency: "EUR"
   usd_per_eur: 1.08           # cambio indicativo per convertire i costi Claude (in $)
 
+# Scala di capitali virtuali: ogni operazione reale replicata su conti di varie dimensioni
+# con i vincoli reali di quella taglia → quale capitale serve per guadagnare al netto di Claude
+capital_ladder:
+  levels_eur: [100, 500, 1000, 2500, 5000, 10000, 25000]
+  margin_min_usd: 2000        # sotto questa soglia niente short (regola del conto margin)
+  min_order_usd: 1.0
+
 schedule:
   trader_every_minutes: 5
   strategist_every_hours: 4

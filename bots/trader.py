@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from tradebot import db, macro, regime, risk, signals
+from tradebot import db, ladder, macro, regime, risk, signals
 from tradebot.broker import AlpacaBroker, is_crypto, norm
 from tradebot.config import ENV, require_keys, deep_merge, load_settings, setup_logging
 
@@ -245,6 +245,14 @@ def cycle():
         acct = broker.account()
         positions = broker.positions()
         exposure = sum(p["market_value"] for p in positions.values())
+        prev = db.last_equity()
+        if prev and (acct["equity"] < 0.2 * prev or acct["equity"] > 5 * prev) and not positions:
+            # salto di oltre 5 volte senza posizioni aperte: è un azzeramento/ricarica del conto, non un crollo
+            db.archive_account_history(f"conto azzerato sul broker ({prev:,.0f}$ → {acct['equity']:,.2f}$)")
+            db.event("system", f"🔁 <b>Conto demo azzerato</b>: {prev:,.2f}$ → {acct['equity']:,.2f}$.\n"
+                               "Storico dell'equity archiviato e blocchi di sicurezza azzerati; diario, lezioni e costi "
+                               "Claude restano. Riparto da qui.")
+            log.warning("azzeramento del conto rilevato: %.2f → %.2f", prev, acct["equity"])
         db.snapshot_equity(acct["equity"], acct["cash"], exposure)
         cb = risk.circuit_breaker(acct["equity"], CFG)
         if cb["state"] != db.kv_get("cb_state", "ok"):
@@ -261,6 +269,10 @@ def cycle():
         if not db.is_paused() and cb["risk_mult"] > 0:
             look_for_entries(acct, broker.positions(), cb, evals)
         run_shadows(all_bars, acct["equity"])
+        try:   # statistica: un suo errore non deve mai fermare il trading
+            ladder.sync(acct["equity"], CFG)
+        except Exception as e:
+            log.warning("scala di capitali: %s", e)
         db.kv_set("heartbeat", db.now_iso())
     except Exception as e:
         log.error("errore nel ciclo: %s\n%s", e, traceback.format_exc())

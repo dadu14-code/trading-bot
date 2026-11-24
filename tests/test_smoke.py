@@ -179,3 +179,33 @@ def test_no_short_when_overstretched():
     b = _crash_bars()   # crollo appena avvenuto: prezzo molto sotto la media 4H
     ev = signals.evaluate_short("SPY", b, {"bias": "short"}, CFG)
     assert any("esteso al ribasso" in v for v in ev["vetoes"]) or any("ipervenduto" in v for v in ev["vetoes"])
+
+
+def test_ladder_constraints_and_breakeven():
+    from tradebot import ladder
+    db.init()
+    db.snapshot_equity(100_000, 100_000, 0)
+    ladder.init()
+    db.kv_set("ladder_start", "2020-01-01T00:00:00+00:00")
+    t = db.open_trade(symbol="SPY", asset_class="stock", side="short", strategy="short", qty=48, entry_price=714.6, stop=727.0)
+    ladder.sync(100_000, CFG)
+    rows = ladder._rows("SELECT level_eur, status, qty FROM ladder_trades WHERE trade_id=?", (t,))
+    by = {r["level_eur"]: r for r in rows}
+    assert by[100]["status"] == "skipped" and by[1000]["status"] == "skipped"     # niente short sotto 2.000 $
+    assert by[2500]["status"] == "open" and float(by[2500]["qty"]).is_integer()   # short solo in azioni intere
+    db.update_trade(t, status="closed", exit_price=700.0, exit_ts=db.now_iso(), pnl=700, r_multiple=1.2)
+    ladder.sync(100_700, CFG)
+    s = ladder.summary(CFG)
+    big = s["levels"][-1]
+    assert big["gross_eur"] > 0 and s["levels"][0]["gross_eur"] == 0
+
+
+def test_account_reset_detection():
+    db.init()
+    db.snapshot_equity(100_000, 100_000, 0)
+    tid = db.open_trade(symbol="BTC/USD", asset_class="crypto", side="long", qty=1, entry_price=100, stop=95)
+    db.archive_account_history("test")
+    db.snapshot_equity(110, 110, 0)
+    assert risk.circuit_breaker(110, CFG)["state"] != "kill"
+    assert db.peak_equity() == 110
+    assert not [t for t in db.open_trades() if t["id"] == tid]

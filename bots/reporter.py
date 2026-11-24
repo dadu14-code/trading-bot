@@ -5,7 +5,7 @@
   • 21:30  "Cosa ho fatto": operazioni, P&L, equity, lezioni apprese
   • domenica: report settimanale + checklist "pronto per il conto reale"
   • watchdog: avvisa se il Trader smette di girare (PC spento, crash)
-  • comandi: /status /piano /report /costi /settimana /lezioni /ottimizza /check /pausa /riprendi
+  • comandi: /status /piano /report /costi /capitale /settimana /lezioni /ottimizza /check /pausa /riprendi
 """
 import html
 import time
@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from tradebot import db, macro, telegram
+from tradebot import db, ladder, macro, telegram
 from tradebot.broker import AlpacaBroker
 from tradebot.config import ENV, require_keys, load_settings, setup_logging
 from tradebot.stats import go_live_readiness, max_drawdown, trade_stats
@@ -93,6 +93,31 @@ def result_block(hours: int, title: str) -> list[str]:
     return lines
 
 
+def ladder_block() -> list[str]:
+    s = ladder.summary(CFG, broker.last_price)
+    lines = [f"🪜 <b>CAPITALE MINIMO PER GUADAGNARE</b> <i>(stesse operazioni del bot, vincoli reali, "
+             f"dal {s['since'][:10]})</i>",
+             f"Claude finora: {s['claude_eur']:.2f}€" + (f" (≈ {s['claude_month_eur']:.0f}€/mese al ritmo attuale)"
+                                                          if s["days"] >= 3 else "")]
+    for lv in s["levels"]:
+        icon = "🟢" if lv["net_eur"] > 0 else "🔴"
+        skip = f", {lv['skipped']} non fattibili" if lv["skipped"] else ""
+        lines.append(f"{icon} {lv['level']:>6,.0f}€: {lv['gross_eur']:+.2f}€ ({lv['ret_pct']:+.2%}) − Claude = "
+                     f"<b>{lv['net_eur']:+.2f}€</b> · {lv['trades']} op{skip}")
+    if s["breakeven_eur"]:
+        lines.append(f"🎯 Capitale di pareggio stimato con Claude: <b>~{s['breakeven_eur']:,.0f}€</b> "
+                     "(sotto questa cifra Claude costa più di quanto rende)")
+    else:
+        lines.append("🎯 Capitale di pareggio: non ancora calcolabile (rendimento finora ≤ 0 o nessuna operazione).")
+    reasons = sorted({r for lv in s["levels"] for r in lv["skip_reasons"]})
+    if reasons:
+        lines.append("<i>Operazioni non fattibili sui capitali piccoli: " + "; ".join(esc(r) for r in reasons) + "</i>")
+    if s["days"] < 30:
+        quanto = "meno di un giorno" if s["days"] < 1 else f"{s['days']:.0f} giorni"
+        lines.append(f"<i>Solo {quanto} di dati: il numero diventa affidabile dopo qualche settimana.</i>")
+    return lines
+
+
 def morning_report():
     d = db.latest_directive() or {}
     if not d:
@@ -126,7 +151,7 @@ def evening_report():
     closed = db.closed_trades(since_iso=since)
     st = trade_stats(closed)
     lines = [f"🌙 <b>COSA HO FATTO OGGI — {datetime.now().strftime('%d/%m/%Y')}</b>", account_line(), ""]
-    lines += result_block(24, "RISULTATO DELLA GIORNATA") + [""]
+    lines += result_block(24, "RISULTATO DELLA GIORNATA") + [""] + ladder_block() + [""]
     lines.append(f"🔵 Aperte: {len(opened)}   ✅ Chiuse: {len(closed)}" +
                  (f"   P&L realizzato: <b>{st['pnl']:+,.2f}$</b> (win {st['win_rate']:.0%})" if closed else ""))
     for t in opened:
@@ -166,7 +191,7 @@ def weekly_report():
     eq = db.equity_since(_since(24 * 7))
     wk = (eq[-1]["equity"] / eq[0]["equity"] - 1) if len(eq) > 1 else 0
     lines = ["📅 <b>REPORT SETTIMANALE</b>", f"Rendimento settimana: <b>{wk:+.2%}</b>", ""]
-    lines += result_block(24 * 7, "RISULTATO DELLA SETTIMANA") + [""]
+    lines += result_block(24 * 7, "RISULTATO DELLA SETTIMANA") + [""] + ladder_block() + [""]
     if s["n"]:
         lines.append(f"Operazioni {s['n']} · win {s['win_rate']:.0%} · PF {s['profit_factor']:.2f} · "
                      f"media {s['avg_r']:+.2f}R · P&L {s['pnl']:+,.2f}$")
@@ -254,6 +279,8 @@ def handle_command(text: str):
         telegram.send("🧠 <b>Lezioni in memoria</b>\n" + ("\n".join(f"• {esc(l)}" for l in ls) or "ancora nessuna"))
     elif cmd == "/costi":
         telegram.send("\n".join(result_block(24, "ULTIME 24 ORE") + [""] + result_block(24 * 7, "ULTIMI 7 GIORNI")))
+    elif cmd == "/capitale":
+        telegram.send("\n".join(ladder_block()))
     elif cmd == "/ottimizza":
         if db.kv_get("optimization_running"):
             telegram.send("🧪 Un'ottimizzazione è già in corso: ti scrivo quando finisce.")
@@ -270,7 +297,7 @@ def handle_command(text: str):
         db.kv_set("cooldown_until", 0)
         telegram.send("▶️ Bot riattivato.")
     else:
-        telegram.send("Comandi: /status /piano /report /costi /settimana /lezioni /ottimizza /check /pausa /riprendi")
+        telegram.send("Comandi: /status /piano /report /costi /capitale /settimana /lezioni /ottimizza /check /pausa /riprendi")
 
 
 def main():

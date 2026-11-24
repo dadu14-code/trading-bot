@@ -227,3 +227,23 @@ def llm_usage_since(since_iso: str = "1970") -> dict:
         r = c.execute("SELECT COUNT(*) n, COALESCE(SUM(input_tokens),0) i, COALESCE(SUM(output_tokens),0) o, "
                       "COALESCE(SUM(cost_usd),0) c FROM llm_usage WHERE ts>=?", (since_iso,)).fetchone()
     return {"calls": r["n"], "input_tokens": r["i"], "output_tokens": r["o"], "cost_usd": r["c"]}
+
+
+# ── azzeramento del conto demo ───────────────────────────────────
+def last_equity() -> float | None:
+    with conn() as c:
+        r = c.execute("SELECT equity FROM equity ORDER BY id DESC LIMIT 1").fetchone()
+    return r["equity"] if r else None
+
+
+def archive_account_history(reason: str):
+    """Il conto è stato azzerato/ricaricato sul broker: archivia la curva dell'equity,
+    annulla le operazioni rimaste aperte e azzera lo stato di rischio. Diario, lezioni
+    e costi Claude restano."""
+    with conn() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS equity_archive AS SELECT * FROM equity WHERE 0")
+        c.execute("INSERT INTO equity_archive SELECT * FROM equity")
+        c.execute("DELETE FROM equity")
+        c.execute("UPDATE trades SET status='void', exit_reason=?, exit_ts=? WHERE status='open'", (reason, now_iso()))
+        for k in ("cb_state", "cooldown_until", "paused"):
+            c.execute("DELETE FROM kv WHERE k=?", (k,))
