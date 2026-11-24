@@ -62,3 +62,26 @@ def short_term_trigger(df: pd.DataFrame) -> dict:
         score -= 0.6   # mai inseguire un prezzo esteso
     return {"score": round(float(np.clip(score, -1, 1)), 3), "pullback": pullback, "breakout": breakout,
             "overextended": overext, "rsi": round(float(r.iloc[-1]), 1)}
+
+
+def price_levels(daily: pd.DataFrame, h4: pd.DataFrame) -> dict:
+    """Livelli di prezzo concreti per il trader senior: medie, massimi/minimi, pivot."""
+    c = daily["close"]
+    r = lambda x: round(float(x), 2)
+    piv = []
+    hi, lo = daily["high"].to_numpy(), daily["low"].to_numpy()
+    for i in range(len(daily) - 3, max(len(daily) - 90, 2), -1):   # swing degli ultimi ~3 mesi
+        if hi[i] == hi[i - 2:i + 3].max():
+            piv.append(("resistenza", r(hi[i]), str(daily.index[i].date())))
+        if lo[i] == lo[i - 2:i + 3].min():
+            piv.append(("supporto", r(lo[i]), str(daily.index[i].date())))
+    return {
+        "last": r(c.iloc[-1]),
+        "sma50_1d": r(ind.sma(c, 50).iloc[-1]), "sma200_1d": r(ind.sma(c, 200).iloc[-1]) if len(c) >= 200 else None,
+        "ema20_4h": r(ind.ema(h4["close"], 20).iloc[-1]), "ema50_4h": r(ind.ema(h4["close"], 50).iloc[-1]),
+        "high_20d": r(daily["high"].iloc[-20:].max()), "low_20d": r(daily["low"].iloc[-20:].min()),
+        "high_55d": r(daily["high"].iloc[-55:].max()), "low_55d": r(daily["low"].iloc[-55:].min()),
+        "prev_week_high": r(daily["high"].iloc[-7:].max()), "prev_week_low": r(daily["low"].iloc[-7:].min()),
+        "atr_1d": r(ind.atr(daily).iloc[-1]),
+        "recent_swing_pivots": [{"type": t, "price": p, "date": d} for t, p, d in piv[:8]],
+    }

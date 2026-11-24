@@ -53,6 +53,7 @@ shadow_variants:
 schedule:
   trader_every_minutes: 5
   strategist_every_hours: 4
+  rereview_move_pct: 3.0      # rivaluta subito se un asset si muove più del 3% dall'ultima analisi
   morning_report: "08:00"      # "cosa sto facendo / piano di oggi"
   evening_report: "21:30"      # "cosa ho fatto oggi"
   weekly_report_day: "sun"

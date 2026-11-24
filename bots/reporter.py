@@ -24,6 +24,7 @@ CFG = load_settings()
 require_keys(log)
 broker = AlpacaBroker()
 esc = lambda s: html.escape(str(s))
+GIORNI = ["lun", "mar", "mer", "gio", "ven", "sab", "dom"]
 BIAS = {"long": "🟢 long", "flat": "⚪ flat", "exit": "🔴 uscire"}
 
 
@@ -136,7 +137,7 @@ def events_block() -> list[str]:
     if not ev:
         return []
     return ["", "📅 <b>Eventi macro in arrivo</b> (ingressi in pausa a ridosso)"] + [
-        f"• {e['ts'].astimezone().strftime('%a %d %H:%M')} {esc(e['country'])} {esc(e['title'])}" for e in ev]
+        f"• {GIORNI[e['ts'].astimezone().weekday()]} {e['ts'].astimezone():%d %H:%M} {esc(e['country'])} {esc(e['title'])}" for e in ev]
 
 
 def shadow_block(since: str, label: str = "settimana") -> list[str]:

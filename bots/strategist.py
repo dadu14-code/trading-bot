@@ -32,7 +32,8 @@ def market_snapshot() -> dict:
                         "long_term_1D": regime.long_term(b["long"]), "medium_term_4H": m,
                         "short_term_1H": regime.short_term_trigger(b["short"]),
                         "historical_analogs": an.as_dict() if an else None,
-                        "candles_1H": patterns.candle_patterns(b["short"])}
+                        "candles_1H": patterns.candle_patterns(b["short"]),
+                        "price_levels": regime.price_levels(b["long"], b["medium"])}
         except Exception as e:  # un simbolo senza dati non deve fermare tutto
             log.warning("dati %s non disponibili: %s", sym, e)
     return out
@@ -70,6 +71,7 @@ def review():
         d, src = rule_based_directive(snap), "rules"
     prev = db.latest_directive()
     db.save_directive(d, src)
+    db.kv_set("review_prices", {k: v["price"] for k, v in snap.items()})
     log.info("direttiva salvata (%s): %s, rischio x%.2f", src, d["risk_posture"], d["global_risk_multiplier"])
     if not prev or prev.get("risk_posture") != d["risk_posture"]:
         db.event("strategy", f"🧭 <b>Cambio postura</b>: {prev.get('risk_posture') if prev else '—'} → "
@@ -109,6 +111,28 @@ def safe(job):
     return run
 
 
+def big_move_check():
+    """Rivaluta subito se un asset si è mosso più della soglia dall'ultima analisi
+    (max una rivalutazione straordinaria all'ora)."""
+    import time
+    ref = db.kv_get("review_prices") or {}
+    thr = CFG["schedule"].get("rereview_move_pct", 3.0) / 100
+    if not ref or time.time() - db.kv_get("last_extra_review", 0) < 3600:
+        return
+    moved = []
+    for sym, p0 in ref.items():
+        try:
+            p1 = float(broker.bars(sym, CFG["timeframes"]["short"])["close"].iloc[-1])
+        except Exception:
+            continue
+        if abs(p1 / p0 - 1) >= thr:
+            moved.append(f"{sym} {p1 / p0 - 1:+.1%}")
+    if moved:
+        db.kv_set("last_extra_review", time.time())
+        db.event("strategy", "⚡ Movimento forte (" + ", ".join(moved) + "): rivaluto la strategia ora.")
+        safe(review)()
+
+
 def retry_if_failed():
     if db.kv_get("strategist_retry") or not db.latest_directive():
         db.kv_set("strategist_retry", False)
@@ -121,6 +145,7 @@ def main():
     safe(review)()
     sch = BlockingScheduler(timezone=ENV.tz)
     sch.add_job(retry_if_failed, "interval", minutes=15, id="retry", max_instances=1, coalesce=True)
+    sch.add_job(safe(big_move_check), "interval", minutes=15, id="bigmove", max_instances=1, coalesce=True)
     sch.add_job(safe(review), "interval", hours=CFG["schedule"]["strategist_every_hours"], id="review",
                 max_instances=1, coalesce=True)
     sch.add_job(safe(postmortem), "cron", hour=7, minute=15, id="postmortem")
