@@ -9,7 +9,7 @@ Ciclo:
   4. strategie ombra: varianti simulate sugli stessi dati, per confronto
 """
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -240,6 +240,77 @@ def run_shadows(all_bars: dict, equity: float):
                 open_syms.add(sym)
 
 
+NO_CLAUDE = "senza_claude"
+
+
+def run_no_claude(all_bars: dict, equity: float, cb: dict):
+    """Portafoglio ombra SENZA Claude: stesse strategie, dati, rischio e blocchi del bot reale,
+    ma guidato dalla direttiva a sole regole. Nessun ordine: serve a misurare quanto vale Claude."""
+    rd = db.kv_get("rules_directive")
+    if not rd:
+        return
+    rk = CFG["risk"]
+    dsym_of = lambda sym: next((x for x in rd.get("symbols", []) if x["symbol"] == sym), None)
+    open_syms, exposure, crypto_exp = set(), 0.0, 0.0
+    now = datetime.now(timezone.utc)
+    for t in db.shadow_open(NO_CLAUDE):
+        b = all_bars.get(t["symbol"])
+        if not b:                                  # azioni a mercato chiuso: si gestisce alla riapertura
+            open_syms.add(t["symbol"])
+            exposure += t["qty"] * t["entry_price"]
+            continue
+        price = float(b["short"]["close"].iloc[-1])
+        atr4 = float(regime.medium_term(b["medium"])["atr"])
+        lt = regime.long_term(b["long"])["label"]
+        bars_since = int((now - datetime.fromisoformat(t["entry_ts"])).total_seconds() // 14400)
+        reason, ns = signals.evaluate_exit(t, price, atr4, bars_since, lt, dsym_of(t["symbol"]), CFG)
+        if reason:
+            short = t.get("side") == "short"
+            px = (max(price, ns) if short else min(price, ns)) if "stop" in reason else price
+            sgn = -1 if short else 1
+            db.shadow_update(t["id"], exit_price=px, exit_ts=db.now_iso(), exit_reason=reason, status="closed",
+                             pnl=sgn * (px - t["entry_price"]) * t["qty"],
+                             r_multiple=sgn * (px - t["entry_price"]) / max(abs(t["entry_price"] - t["initial_stop"]), 1e-9))
+        else:
+            db.shadow_update(t["id"], stop=ns, highest=max(t["highest"], price), lowest=min(t["lowest"] or price, price))
+            open_syms.add(t["symbol"])
+            exposure += t["qty"] * price
+            crypto_exp += t["qty"] * price if is_crypto(t["symbol"]) else 0
+    if db.is_paused() or cb["risk_mult"] == 0 or macro.macro_blackout(CFG):
+        return                                     # stessi blocchi del bot reale
+    cutoff = (now - timedelta(hours=CFG["capitulation"].get("cooldown_hours", 48))).isoformat()
+    recent_caps = {r["symbol"] for r in db.shadow_closed(cutoff)                # pausa dopo un rimbalzo, come il reale
+                   if r["variant"] == NO_CLAUDE and r.get("strategy") == "capitulation"}
+    vmult, _ = risk.vol_scaler(CFG)
+    caps_open = sum(1 for t in db.shadow_open(NO_CLAUDE) if t.get("strategy") == "capitulation")
+    for sym, b in all_bars.items():
+        if sym in open_syms or len(open_syms) >= rk["max_open_positions"]:
+            continue
+        dsym = dsym_of(sym)
+        cands = [signals.evaluate_entry(sym, b, dsym, CFG)]
+        if CFG.get("shorts", {}).get("enabled") and sym in CFG["shorts"].get("symbols", []):
+            cands.append(signals.evaluate_short(sym, b, dsym, CFG))
+        if CFG.get("capitulation", {}).get("enabled") and sym not in recent_caps:
+            cands.append(signals.evaluate_capitulation(sym, b, dsym, rd, sentiment_for(sym), CFG))
+        ev = next((e for e in cands if e["go"]), None)
+        if not ev or (ev["strategy"] == "capitulation" and caps_open >= CFG["capitulation"].get("max_open", 1)):
+            continue
+        px = float(b["short"]["close"].iloc[-1])
+        stop = signals.initial_stop(ev, px, CFG)
+        qty, _ = risk.position_size(equity, px, stop, size_mult(ev, dsym, rd.get("global_risk_multiplier", 0.7), cb, vmult),
+                                    CFG, exposure, crypto_exp, is_crypto(sym))
+        if ev["side"] == "short":
+            qty = int(qty)
+        if qty <= 0:
+            continue
+        db.shadow_insert(variant=NO_CLAUDE, symbol=sym, side=ev["side"], strategy=ev["strategy"], qty=qty, entry_price=px,
+                         entry_ts=db.now_iso(), stop=stop, initial_stop=stop, highest=px, lowest=px)
+        open_syms.add(sym)
+        exposure += qty * px
+        crypto_exp += qty * px if is_crypto(sym) else 0
+        caps_open += ev["strategy"] == "capitulation"
+
+
 def cycle():
     try:
         acct = broker.account()
@@ -269,7 +340,11 @@ def cycle():
         if not db.is_paused() and cb["risk_mult"] > 0:
             look_for_entries(acct, broker.positions(), cb, evals)
         run_shadows(all_bars, acct["equity"])
-        try:   # statistica: un suo errore non deve mai fermare il trading
+        try:   # statistiche: un loro errore non deve mai fermare il trading
+            run_no_claude(all_bars, acct["equity"], cb)
+        except Exception as e:
+            log.warning("portafoglio senza Claude: %s", e)
+        try:
             ladder.sync(acct["equity"], CFG)
         except Exception as e:
             log.warning("scala di capitali: %s", e)

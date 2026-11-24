@@ -209,3 +209,17 @@ def test_account_reset_detection():
     assert risk.circuit_breaker(110, CFG)["state"] != "kill"
     assert db.peak_equity() == 110
     assert not [t for t in db.open_trades() if t["id"] == tid]
+
+
+def test_claude_value_comparison():
+    from tradebot import claude_value
+    db.init()
+    db.kv_set("noclaude_start", "2020-01-01T00:00:00+00:00")
+    db.snapshot_equity(100_000, 100_000, 0)
+    t = db.open_trade(symbol="ETH/USD", asset_class="crypto", side="long", strategy="trend", qty=10, entry_price=100, stop=95)
+    db.update_trade(t, status="closed", pnl=50, exit_price=105, exit_ts=db.now_iso())
+    db.shadow_insert(variant="senza_claude", symbol="SPY", side="short", strategy="short", qty=2, entry_price=700,
+                     entry_ts=db.now_iso(), stop=720, initial_stop=720, highest=700, lowest=700)
+    v = claude_value.compare(lambda sym: 690.0)          # short ombra in guadagno di 20 $
+    assert v["without_claude"] == 20 and v["with_claude"] >= 50
+    assert abs(v["value"] - (v["edge"] - v["cost"])) < 1e-9

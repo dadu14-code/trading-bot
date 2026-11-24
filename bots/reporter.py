@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from tradebot import db, ladder, macro, telegram
+from tradebot import claude_value, db, ladder, macro, telegram
 from tradebot.broker import AlpacaBroker
 from tradebot.config import ENV, require_keys, load_settings, setup_logging
 from tradebot.stats import go_live_readiness, max_drawdown, trade_stats
@@ -93,6 +93,31 @@ def result_block(hours: int, title: str) -> list[str]:
     return lines
 
 
+def claude_value_block() -> list[str]:
+    v = claude_value.compare(broker.last_price)
+    if not v:
+        return []
+    rp = CFG.get("report", {})
+    cap, fx = rp.get("real_capital", 100), rp.get("usd_per_eur", 1.08)
+    giorni = "meno di un giorno" if v["days"] < 1 else f"{v['days']:.0f} giorni"
+    lines = [f"🤖 <b>CLAUDE VALE QUELLO CHE COSTA?</b> <i>(dal {v['since'][:10]}, {giorni})</i>",
+             f"• Con Claude (bot reale): <b>{v['with_claude']:+,.2f}$</b> · {v['n_with']} op ({v['open_with']} aperte)",
+             f"• Senza Claude (solo regole, simulato): <b>{v['without_claude']:+,.2f}$</b> · {v['n_without']} op "
+             f"({v['open_without']} aperte)",
+             f"• Guadagno in più grazie a Claude {v['edge']:+,.2f}$ − costo {v['cost']:.2f}$ = <b>{v['value']:+,.2f}$</b>"]
+    if v["equity_ref"]:
+        edge_pct = v["edge"] / v["equity_ref"]
+        lines.append(f"• Su un conto da {cap:,.0f}€: {edge_pct * cap:+.2f}€ − Claude {v['cost'] / fx:.2f}€ = "
+                     f"<b>{edge_pct * cap - v['cost'] / fx:+.2f}€</b>")
+    if v["days"] < 14 or (v["n_with"] + v["n_without"]) < 10:
+        lines.append("<i>Verdetto: troppo presto (servono almeno 2 settimane e una decina di operazioni).</i>")
+    elif v["value"] > 0:
+        lines.append("✅ <b>Verdetto: finora Claude si ripaga</b> sul conto demo.")
+    else:
+        lines.append("❌ <b>Verdetto: finora Claude NON si ripaga</b>: le sole regole rendono quanto o più, al netto del costo.")
+    return lines
+
+
 def ladder_block() -> list[str]:
     s = ladder.summary(CFG, broker.last_price)
     lines = [f"🪜 <b>CAPITALE MINIMO PER GUADAGNARE</b> <i>(stesse operazioni del bot, vincoli reali, "
@@ -151,7 +176,7 @@ def evening_report():
     closed = db.closed_trades(since_iso=since)
     st = trade_stats(closed)
     lines = [f"🌙 <b>COSA HO FATTO OGGI — {datetime.now().strftime('%d/%m/%Y')}</b>", account_line(), ""]
-    lines += result_block(24, "RISULTATO DELLA GIORNATA") + [""] + ladder_block() + [""]
+    lines += result_block(24, "RISULTATO DELLA GIORNATA") + [""] + claude_value_block() + [""] + ladder_block() + [""]
     lines.append(f"🔵 Aperte: {len(opened)}   ✅ Chiuse: {len(closed)}" +
                  (f"   P&L realizzato: <b>{st['pnl']:+,.2f}$</b> (win {st['win_rate']:.0%})" if closed else ""))
     for t in opened:
@@ -191,7 +216,7 @@ def weekly_report():
     eq = db.equity_since(_since(24 * 7))
     wk = (eq[-1]["equity"] / eq[0]["equity"] - 1) if len(eq) > 1 else 0
     lines = ["📅 <b>REPORT SETTIMANALE</b>", f"Rendimento settimana: <b>{wk:+.2%}</b>", ""]
-    lines += result_block(24 * 7, "RISULTATO DELLA SETTIMANA") + [""] + ladder_block() + [""]
+    lines += result_block(24 * 7, "RISULTATO DELLA SETTIMANA") + [""] + claude_value_block() + [""] + ladder_block() + [""]
     if s["n"]:
         lines.append(f"Operazioni {s['n']} · win {s['win_rate']:.0%} · PF {s['profit_factor']:.2f} · "
                      f"media {s['avg_r']:+.2f}R · P&L {s['pnl']:+,.2f}$")
@@ -278,7 +303,8 @@ def handle_command(text: str):
         ls = db.recent_lessons(15)
         telegram.send("🧠 <b>Lezioni in memoria</b>\n" + ("\n".join(f"• {esc(l)}" for l in ls) or "ancora nessuna"))
     elif cmd == "/costi":
-        telegram.send("\n".join(result_block(24, "ULTIME 24 ORE") + [""] + result_block(24 * 7, "ULTIMI 7 GIORNI")))
+        telegram.send("\n".join(result_block(24, "ULTIME 24 ORE") + [""] + result_block(24 * 7, "ULTIMI 7 GIORNI")
+                                 + [""] + claude_value_block()))
     elif cmd == "/capitale":
         telegram.send("\n".join(ladder_block()))
     elif cmd == "/ottimizza":

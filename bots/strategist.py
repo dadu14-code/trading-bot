@@ -77,6 +77,10 @@ def review():
     src = "claude"
     if not d:
         d, src = rule_based_directive(snap), "rules"
+    # direttiva "senza Claude" (gratuita): guida il portafoglio ombra di confronto
+    db.kv_set("rules_directive", {**rule_based_directive(snap), "_ts": db.now_iso()})
+    if not db.kv_get("noclaude_start"):
+        db.kv_set("noclaude_start", db.now_iso())
     prev = db.latest_directive()
     db.save_directive(d, src)
     db.kv_set("review_prices", {k: v["price"] for k, v in snap.items()})
