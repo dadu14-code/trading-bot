@@ -2,6 +2,11 @@
 # Avvia i 3 bot in Docker (Mac/Linux/VPS)
 set -e
 cd "$(dirname "$0")"
+if ! docker info >/dev/null 2>&1; then
+  echo "Docker non è avviato. Apri Docker Desktop, attendi 'Engine running' e rilancia ./avvia.sh"
+  [ "$(uname)" = "Darwin" ] && open -a Docker && echo "(Sto aprendo Docker Desktop per te…)"
+  exit 1
+fi
 if [ ! -f .env ]; then cp .env.example .env; echo "Ho creato .env: inserisci le chiavi e rilancia."; exit 1; fi
 docker compose run --rm --build tools python -m tradebot.check || { echo "Diagnostica fallita: controlla .env"; exit 1; }
 docker compose up -d --build
