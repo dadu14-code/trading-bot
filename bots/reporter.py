@@ -54,6 +54,11 @@ def account_line() -> str:
 
 def morning_report():
     d = db.latest_directive() or {}
+    if not d:
+        telegram.send("☀️ <b>COSA STO FACENDO</b>\n" + account_line() + "\n\n⏳ La prima analisi strategica non è "
+                      "ancora pronta (serve qualche minuto dall'avvio). Se dura più di 15 minuti, controlla i log:\n"
+                      "<code>docker compose logs --tail 40 strategist</code>\n\n📂 <b>Posizioni</b>\n" + positions_block())
+        return
     lines = [f"☀️ <b>COSA STO FACENDO — {datetime.now().strftime('%d/%m/%Y')}</b>", account_line(), "",
              f"🧭 <b>Postura:</b> {esc(d.get('risk_posture', 'n/d'))} · rischio x{d.get('global_risk_multiplier', 1):.2f}"
              f" <i>({esc(d.get('_source', '-'))})</i>",

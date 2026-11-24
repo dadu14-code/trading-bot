@@ -63,6 +63,7 @@ def review():
            "lessons_from_past": db.recent_lessons(25), "markets": snap,
            "previous_directive": {k: v for k, v in (db.latest_directive() or {}).items() if k in ("market_view", "risk_posture")},
            "risk_limits": CFG["risk"]}
+    log.info("dati raccolti per %d asset, chiedo a Claude (%s)…", len(snap), "attivo" if senior.enabled else "chiave assente")
     d = senior.strategy_review(ctx)
     src = "claude"
     if not d:
@@ -94,14 +95,36 @@ def postmortem():
     log.info("postmortem su %d operazioni", len(todo))
 
 
+def safe(job):
+    """Un errore in un'analisi non deve mai spegnere il bot: avvisa e riprova al giro dopo."""
+    def run():
+        try:
+            job()
+        except Exception as e:
+            log.exception("errore in %s", job.__name__)
+            db.event("error", f"❗ Bot Strategia, errore in {job.__name__}: {type(e).__name__}: {str(e)[:300]}\n"
+                              "Riprovo tra 15 minuti.")
+            db.kv_set("strategist_retry", True)
+    run.__name__ = job.__name__
+    return run
+
+
+def retry_if_failed():
+    if db.kv_get("strategist_retry") or not db.latest_directive():
+        db.kv_set("strategist_retry", False)
+        safe(review)()
+
+
 def main():
     db.init()
-    review()
+    db.event("system", "🧭 Bot Strategia avviato: prima analisi in corso (1–3 minuti)…")
+    safe(review)()
     sch = BlockingScheduler(timezone=ENV.tz)
-    sch.add_job(review, "interval", hours=CFG["schedule"]["strategist_every_hours"], id="review",
+    sch.add_job(retry_if_failed, "interval", minutes=15, id="retry", max_instances=1, coalesce=True)
+    sch.add_job(safe(review), "interval", hours=CFG["schedule"]["strategist_every_hours"], id="review",
                 max_instances=1, coalesce=True)
-    sch.add_job(postmortem, "cron", hour=7, minute=15, id="postmortem")
-    sch.add_job(review, "cron", hour=7, minute=40, id="morning_review")  # pronta per il report delle 08:00
+    sch.add_job(safe(postmortem), "cron", hour=7, minute=15, id="postmortem")
+    sch.add_job(safe(review), "cron", hour=7, minute=40, id="morning_review")  # pronta per il report delle 08:00
     sch.start()
 
 
