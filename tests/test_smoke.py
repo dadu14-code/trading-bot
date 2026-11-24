@@ -167,3 +167,15 @@ def test_walk_forward_mixed_lengths():
     short_pre = backtest.precompute(backtest.synthetic(3000, 5), CFG, warmup=1500)
     res = optimize.walk_forward([(long_pre, 0.0025), (short_pre, 0.0005)], backtest.params_from(CFG), folds=2)
     assert res["period"][0] < res["period"][1] and len(res["folds"]) == 2
+
+
+def test_no_capitulation_against_short_bias():
+    b = _crash_bars()
+    ev = signals.evaluate_capitulation("QQQ", b, {"bias": "short"}, {"capitulation_allowed": True}, {}, CFG)
+    assert not ev["go"] and any("conflitto" in v for v in ev["vetoes"])
+
+
+def test_no_short_when_overstretched():
+    b = _crash_bars()   # crollo appena avvenuto: prezzo molto sotto la media 4H
+    ev = signals.evaluate_short("SPY", b, {"bias": "short"}, CFG)
+    assert any("esteso al ribasso" in v for v in ev["vetoes"]) or any("ipervenduto" in v for v in ev["vetoes"])

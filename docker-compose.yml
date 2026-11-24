@@ -22,6 +22,7 @@ services:
   reporter:                # Bot 3: Telegram – report, alert, comandi
     <<: *common
     command: python -m bots.reporter
+    depends_on: [optimizer, watchdog]   # garantisce che partano anche con updater di versioni precedenti
 
   optimizer:               # Bot 5: ottimizzazione walk-forward settimanale su dati reali (non applica nulla da solo)
     <<: *common
@@ -37,6 +38,16 @@ services:
     volumes: ["/var/run/docker.sock:/var/run/docker.sock", "${PWD:?}:${PWD:?}"]
     restart: always
     logging: {driver: json-file, options: {max-size: "5m", max-file: "3"}}
+
+  watchdog:                # Bot 6: tiene acceso e aggiornato l'updater DALL'ESTERNO
+    image: tradebot-updater:latest   # costruita dal servizio updater
+    env_file: .env
+    environment: {PROJECT_DIR: "${PWD:?}", PWD: "${PWD:?}"}
+    working_dir: "${PWD:?}"
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock", "${PWD:?}:${PWD:?}"]
+    entrypoint: ["sh", "${PWD:?}/updater/watchdog.sh"]
+    restart: always
+    logging: {driver: json-file, options: {max-size: "2m", max-file: "2"}}
 
   # Strumenti a richiesta (non partono con "up"):
   #   docker compose run --rm tools python -m tradebot.check --telegram-test

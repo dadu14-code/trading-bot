@@ -28,6 +28,8 @@ def market_snapshot() -> dict:
             m = regime.medium_term(b["medium"])
             m.pop("atr", None)
             out[sym] = {"price": float(b["short"]["close"].iloc[-1]),
+                        "price_time_utc": b["short"].index[-1].isoformat(),
+                        "price_note": "ultimo prezzo orario; può differire da last_daily_close (gap di apertura, barra giornaliera di ieri)",
                         "change_24h": float(b["short"]["close"].iloc[-1] / b["short"]["close"].iloc[-25] - 1),
                         "long_term_1D": regime.long_term(b["long"]), "medium_term_4H": m,
                         "short_term_1H": regime.short_term_trigger(b["short"]),
@@ -82,8 +84,10 @@ def review():
     if not prev or prev.get("risk_posture") != d["risk_posture"]:
         db.event("strategy", f"🧭 <b>Cambio postura</b>: {prev.get('risk_posture') if prev else '—'} → "
                              f"<b>{d['risk_posture']}</b>\n{d['market_view']}")
-    for w in d.get("warnings", []):
-        db.event("warning", f"⚠️ {w}")
+    old = set((prev or {}).get("warnings", []))
+    new = [w for w in d.get("warnings", []) if w not in old]
+    if new:
+        db.event("warning", "⚠️ <b>Avvisi del bot Strategia</b>\n" + "\n".join(f"• {w}" for w in new))
 
 
 def postmortem():

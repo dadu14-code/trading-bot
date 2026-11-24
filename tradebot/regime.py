@@ -76,7 +76,7 @@ def price_levels(daily: pd.DataFrame, h4: pd.DataFrame) -> dict:
         if lo[i] == lo[i - 2:i + 3].min():
             piv.append(("supporto", r(lo[i]), str(daily.index[i].date())))
     return {
-        "last": r(c.iloc[-1]),
+        "last_daily_close": r(c.iloc[-1]), "last_daily_bar_date": str(daily.index[-1].date()),
         "sma50_1d": r(ind.sma(c, 50).iloc[-1]), "sma200_1d": r(ind.sma(c, 200).iloc[-1]) if len(c) >= 200 else None,
         "ema20_4h": r(ind.ema(h4["close"], 20).iloc[-1]), "ema50_4h": r(ind.ema(h4["close"], 50).iloc[-1]),
         "high_20d": r(daily["high"].iloc[-20:].max()), "low_20d": r(daily["low"].iloc[-20:].min()),

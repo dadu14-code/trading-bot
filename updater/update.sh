@@ -39,6 +39,10 @@ git config --global user.email "updater@tradebot.local"; git config --global use
 [ -d .git ] || git init -q
 last_err=0
 
+BUSY=data/.updater_busy      # finché esiste, il watchdog non tocca l'updater
+mkdir -p data; rm -f "$BUSY"
+trap 'rm -f "$BUSY"' EXIT
+
 app_services() {
   local s; s=$(docker compose config --services 2>/dev/null | grep -v -x -e updater -e tools)
   echo "${s:-strategist trader reporter}"   # mai vuoto: "up -d" senza nomi riavvierebbe anche l'updater
@@ -47,7 +51,7 @@ app_services() {
 # all'avvio: assicura che tutti i servizi siano attivi (anche quelli aggiunti da un aggiornamento)
 if git rev-parse -q --verify HEAD >/dev/null 2>&1; then
   # shellcheck disable=SC2046
-  docker compose up -d $(app_services) >/tmp/up.log 2>&1 && log "servizi attivi: $(app_services | tr '\n' ' ')"
+  docker compose up -d --no-deps $(app_services) >/tmp/up.log 2>&1 && log "servizi attivi: $(app_services | tr '\n' ' ')"
 fi
 
 while true; do
@@ -65,20 +69,24 @@ Cosa cambia e perché:
 ${CHANGES}
 
 Eseguo i test prima di installarlo…"
+      touch "$BUSY"
       git reset -q --hard "$NEW"
       if docker compose build -q >/tmp/build.log 2>&1 && \
          docker compose run --rm -T tools python -m pytest -q tests >/tmp/test.log 2>&1; then
         # shellcheck disable=SC2046
-        docker compose up -d $(app_services) >/tmp/up.log 2>&1
+        docker compose up -d --no-deps $(app_services) >/tmp/up.log 2>&1
         tg "✅ Aggiornamento ${NEW:0:7} installato: test superati, bot riavviati."
         log "installata ${NEW:0:7}"
-        docker compose up -d --build updater >/dev/null 2>&1   # se è cambiato anche l'updater, si aggiorna per ultimo
+        # NON ricreare se stessi (il comando morirebbe a metà): se l'immagine dell'updater
+        # è cambiata, ci pensa il watchdog dall'esterno appena finiamo.
+        rm -f "$BUSY"
       else
         FAIL=$(tail -q -n 15 /tmp/build.log /tmp/test.log 2>/dev/null | tail -c 1200)
         if [ -n "$CUR" ]; then
           git reset -q --hard "$CUR"
           docker compose build -q >/dev/null 2>&1
         fi
+        rm -f "$BUSY"
         tg "❌ Aggiornamento ${NEW:0:7} NON installato: i test non sono passati. I bot restano sulla versione precedente (${CUR:0:7}).
 
 ${FAIL}"

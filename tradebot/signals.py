@@ -13,6 +13,7 @@ Regole "da vecchio trader" valide per tutte:
 """
 import pandas as pd
 
+from . import indicators as ind
 from . import patterns, regime
 
 _norm = lambda x: (max(-1, min(1, x)) + 1) / 2
@@ -75,6 +76,10 @@ def evaluate_short(symbol: str, bars: dict[str, pd.DataFrame], directive_sym: di
         vetoes.append("trend intermedio (4H) non ribassista")
     if st["oversold"]:
         vetoes.append("prezzo ipervenduto (RSI<22): rischio rimbalzo violento")
+    h4 = bars["medium"]
+    stretch = float((ind.ema(h4["close"], 20).iloc[-1] - h4["close"].iloc[-1]) / mt["atr"]) if mt["atr"] else 0
+    if stretch > sh.get("max_stretch_atr", 3.0):
+        vetoes.append(f"prezzo già esteso al ribasso ({stretch:.1f} ATR sotto la media 4H): rischio squeeze, attendo il rimbalzo")
     if an and (1 - an.win_rate) < sc["analog_min_winrate"]:
         vetoes.append(f"analogie storiche sfavorevoli allo short (ribasso nel {1 - an.win_rate:.0%} dei casi)")
     if st["score"] <= 0:
@@ -116,8 +121,8 @@ def evaluate_capitulation(symbol: str, bars: dict[str, pd.DataFrame], directive_
         vetoes.append(f"nessuna paura estrema (Fear&Greed {fg})")
     if directive and directive.get("capitulation_allowed") is False:
         vetoes.append("bot Strategia: rimbalzi non consentiti")
-    if directive_sym and directive_sym.get("bias") == "exit":
-        vetoes.append("bot Strategia: bias exit")
+    if directive_sym and directive_sym.get("bias") in ("exit", "short"):
+        vetoes.append(f"bot Strategia: bias {directive_sym.get('bias')} su questo asset (niente rimbalzi in conflitto)")
     go = score >= cc.get("min_score", 0.85) and not vetoes
     reason = (f"RIMBALZO · {cap['stretch_atr']:.1f} ATR sotto la media 4H · volume x{cap['volume_vs_avg']:.1f} · "
               f"{', '.join(cap['signals']) or 'nessuna inversione'}" + (f" · {', '.join(extras)}" if extras else ""))

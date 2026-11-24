@@ -45,6 +45,7 @@ shorts:
   entry_threshold: 0.58
   atr_stop_mult: 2.0
   atr_trail_mult: 2.5
+  max_stretch_atr: 3.0       # niente short se il prezzo è già >3 ATR sotto la media 4H
 
 # RIMBALZO da capitolazione: crollo esteso + volume climax + prima inversione.
 # Opera anche contro il trend primario, quindi rischio piccolo e uscita rapida.

@@ -25,7 +25,7 @@ squeeze: usali solo con trend ribassista chiaro su 1D e 4H.
 - RIMBALZO DA CAPITOLAZIONE (tutti gli asset): piccoli long contro trend dopo un crollo con volumi \
 climax e una prima inversione, rischio 0,25% e uscita entro 2 giorni. Lo abiliti o lo vieti con \
 capitulation_allowed: vietalo quando il crollo ha cause strutturali o è guidato da eventi in corso.
-"flat" blocca trend e short ma non i rimbalzi; "exit" chiude tutto e blocca anche i rimbalzi.
+"flat" blocca trend e short ma non i rimbalzi; "short" ed "exit" bloccano anche i rimbalzi su quell'asset.
 Nei dati trovi i livelli di prezzo reali (price_levels): usali per i livelli chiave.
 
 Come ragioni:
