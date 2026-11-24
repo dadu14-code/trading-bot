@@ -1,4 +1,4 @@
-# TradeBot – sistema di trading automatico a 3 bot
+# TradeBot – sistema di trading automatico
 
 > ⚠️ **Software sperimentale. Nessun sistema garantisce profitti.** Parte su conto **DEMO**: si passa al
 > reale solo quando la checklist settimanale è tutta verde, e comunque con capitale che puoi permetterti di perdere.
@@ -21,7 +21,18 @@
                 │  BOT 3 · REPORTER       │  Telegram: alert live, 08:00 piano,
                 │                         │  21:30 consuntivo, domenica settimanale
                 └─────────────────────────┘
+                ┌─────────────────────────┐
+                │  BOT 4 · UPDATER        │  ogni 5 min controlla GitHub: avvisa su Telegram
+                │                         │  cosa cambia e perché → test → installa o annulla
+                └─────────────────────────┘
 ```
+
+### Le tre strategie
+| Strategia | Quando opera | Rischio |
+|---|---|---|
+| 🔵 **Trend long** | Trend rialzista su 1D e 4H, pullback o breakout su 1H, analogie storiche favorevoli, bias "long" | 0,75% × convinzione |
+| 🟣 **Short ETF** (SPY, QQQ, GLD) | Trend ribassista su 1D e 4H, rimbalzo fallito o rottura dei minimi, **solo con bias "short"** dal bot Strategia. Niente short sulle crypto (Alpaca non lo consente) | 0,75% × convinzione × 0,75 |
+| 🟡 **Rimbalzo da capitolazione** | Crollo esteso (≥2,5 ATR sotto la media o RSI giornaliero <25) + volume ≥2× + prima inversione; per le crypto anche paura estrema. Claude può vietarlo | 0,25% fisso, obiettivo +1,5R, massimo 2 giorni, pausa di 48h dopo ogni rimbalzo |
 
 ### Come "ragiona"
 | Livello | Cosa fa | File |
@@ -64,10 +75,26 @@ Per fermarli: `ferma.bat` / `./ferma.sh`. I dati e i log restano nella cartella 
 **Disattiva la sospensione del PC** (Windows: Impostazioni → Sistema → Alimentazione → Sospensione: *Mai*).
 Se il PC si spegne, il watchdog ti avvisa su Telegram e gli stop di emergenza sul broker restano attivi.
 
+### Aggiornamenti automatici
+Il 4° container (`updater`) controlla il repository GitHub ogni 5 minuti. Quando c'è una versione nuova:
+1. ti scrive su Telegram **cosa cambia e perché**;
+2. scarica il codice, ricostruisce l'immagine ed esegue tutti i test;
+3. se passano riavvia i bot e conferma; se falliscono **torna alla versione precedente** e ti avvisa.
+
+`.env` e `data/` (chiavi, diario, lezioni, curva dell'equity) non vengono mai toccati.
+
+Configurazione una tantum: un token GitHub di sola lettura in `.env`:
+1. GitHub → foto profilo → **Settings → Developer settings → Personal access tokens → Fine-grained tokens →
+   Generate new token**.
+2. Nome `tradebot-updater`; scadenza a piacere (quando scade ricevi un avviso su Telegram);
+   **Repository access: Only select repositories → `trading-bot`**.
+3. **Permissions → Repository permissions → Contents: Read-only**. Nient'altro.
+4. *Generate token*, copialo e incollalo in `.env` alla riga `GITHUB_TOKEN=`.
+
 ### Fase 2 – VPS
 Stessa identica immagine. Su un VPS Linux (~5 €/mese) con Docker installato:
 ```bash
-git clone <tuo-repo> trading-bot && cd trading-bot
+git clone https://github.com/dadu14-code/trading-bot.git && cd trading-bot
 ```
 Copia il tuo `.env` e la cartella `data/` dal PC (così il bot conserva diario, lezioni e curva dell'equity), poi:
 ```bash
@@ -101,6 +128,9 @@ docker compose up -d --build
 ## Prima di fidarsi: backtest e ottimizzazione walk-forward
 ```bash
 docker compose run --rm tools python -m tradebot.backtest --symbol BTC/USD --days 730
+```
+```bash
+docker compose run --rm tools python -m tradebot.backtest --symbol SPY --days 730 --strategy all
 ```
 ```bash
 docker compose run --rm tools python -m tradebot.optimize --symbols BTC/USD ETH/USD SOL/USD --days 730

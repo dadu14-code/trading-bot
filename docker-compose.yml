@@ -23,6 +23,16 @@ services:
     <<: *common
     command: python -m bots.reporter
 
+  updater:                 # Bot 4: aggiornamento automatico da GitHub (avvisa su Telegram, testa, installa)
+    build: ./updater
+    image: tradebot-updater:latest
+    env_file: .env
+    environment: {PROJECT_DIR: "${PWD:?}", PWD: "${PWD:?}"}
+    working_dir: "${PWD:?}"
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock", "${PWD:?}:${PWD:?}"]
+    restart: always
+    logging: {driver: json-file, options: {max-size: "5m", max-file: "3"}}
+
   # Strumenti a richiesta (non partono con "up"):
   #   docker compose run --rm tools python -m tradebot.check --telegram-test
   #   docker compose run --rm tools python -m tradebot.optimize --days 730
