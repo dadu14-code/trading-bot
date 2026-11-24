@@ -48,30 +48,51 @@ Senza chiave Anthropic il sistema funziona lo stesso, con regole di riserva più
 2. **Bot Telegram**: su Telegram scrivi a `@BotFather` → `/newbot` → copia il token. Manda un messaggio
    al tuo bot, poi apri `https://api.telegram.org/bot<TOKEN>/getUpdates` e copia `chat.id`.
 3. **Claude API**: chiave su <https://console.anthropic.com>.
-4. Configura: copia `.env.example` in `.env` e compila le chiavi.
-5. **Verifica i collegamenti**:
-   ```bash
-   python -m tradebot.check --telegram-test
-   ```
+4. Installa **Docker Desktop** (<https://www.docker.com/products/docker-desktop/>). Su Windows accetta
+   l'attivazione di WSL2 se richiesta e riavvia. Nelle impostazioni attiva
+   *Start Docker Desktop when you sign in*. Non serve installare Python.
 
 ### Fase 1 – sul tuo PC
-Serve Python 3.11+ (<https://www.python.org/downloads/>, su Windows spunta *Add python.exe to PATH*).
+- **Windows**: doppio clic su `avvia.bat`. Al primo avvio crea `.env` e lo apre nel Blocco note:
+  inserisci le chiavi, salva e rilancia `avvia.bat`.
+- **Mac/Linux**: `./avvia.sh` (stesso funzionamento).
 
-- **Windows**: doppio clic su `avvia_windows.bat`
-- **Mac/Linux**: `./avvia_mac_linux.sh`
+Lo script costruisce l'immagine, esegue la diagnostica e avvia i 3 container in background. Puoi chiudere
+la finestra: i bot restano attivi e ripartono da soli dopo un crash o un riavvio del PC (`restart: always`).
+Per fermarli: `ferma.bat` / `./ferma.sh`. I dati e i log restano nella cartella `data/`.
 
-Il primo avvio installa le librerie, esegue la diagnostica e lancia i 3 bot, riavviandoli se si fermano.
-I log finiscono in `data/logs/`. **Disattiva la sospensione del PC** (Windows: Impostazioni → Sistema →
-Alimentazione → Sospensione: *Mai*; su Mac lo script usa `caffeinate`). Se il PC si spegne, il watchdog
-ti avvisa e gli stop di emergenza sul broker restano attivi.
+**Disattiva la sospensione del PC** (Windows: Impostazioni → Sistema → Alimentazione → Sospensione: *Mai*).
+Se il PC si spegne, il watchdog ti avvisa su Telegram e gli stop di emergenza sul broker restano attivi.
 
 ### Fase 2 – VPS
-6. **Avvio 24/7** su un server (VPS Linux da ~5 €/mese, es. Hetzner/Contabo/DigitalOcean) con Docker:
-   ```bash
-   docker compose up -d --build
-   docker compose logs -f trader
-   ```
-   `restart: always` riavvia i bot se crashano o se il server si riavvia.
+Stessa identica immagine. Su un VPS Linux (~5 €/mese) con Docker installato:
+```bash
+git clone <tuo-repo> trading-bot && cd trading-bot
+```
+Copia il tuo `.env` e la cartella `data/` dal PC (così il bot conserva diario, lezioni e curva dell'equity), poi:
+```bash
+./avvia.sh
+```
+Ferma prima i bot sul PC: due istanze sullo stesso conto si pesterebbero i piedi.
+
+### Comandi utili
+```bash
+docker compose ps
+```
+```bash
+docker compose logs -f trader
+```
+```bash
+docker compose run --rm tools python -m tradebot.check --telegram-test
+```
+Dopo una modifica a `config/settings.yaml`:
+```bash
+docker compose restart
+```
+Dopo una modifica al codice:
+```bash
+docker compose up -d --build
+```
 
 ## Comandi Telegram
 `/status` · `/piano` (report "cosa sto facendo") · `/report` (report "cosa ho fatto") · `/settimana` ·
@@ -79,9 +100,13 @@ ti avvisa e gli stop di emergenza sul broker restano attivi.
 
 ## Prima di fidarsi: backtest e ottimizzazione walk-forward
 ```bash
-python -m tradebot.backtest --symbol BTC/USD --days 730
-python -m tradebot.optimize --symbols BTC/USD ETH/USD SOL/USD --days 730
-python -m pytest -q tests
+docker compose run --rm tools python -m tradebot.backtest --symbol BTC/USD --days 730
+```
+```bash
+docker compose run --rm tools python -m tradebot.optimize --symbols BTC/USD ETH/USD SOL/USD --days 730
+```
+```bash
+docker compose run --rm tools python -m pytest -q tests
 ```
 Il backtest testa solo la parte quantitativa (senza Claude), con commissioni e senza look-ahead.
 L'ottimizzatore sceglie i parametri sul passato e li misura su periodi **mai visti**, preferendo

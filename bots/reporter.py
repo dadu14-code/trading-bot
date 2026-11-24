@@ -15,12 +15,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from tradebot import db, macro, telegram
 from tradebot.broker import AlpacaBroker
-from tradebot.config import ENV, load_settings, setup_logging
+from tradebot.config import ENV, require_keys, load_settings, setup_logging
 from tradebot.stats import go_live_readiness, max_drawdown, trade_stats
 from tradebot.check import run_checks
 
 log = setup_logging("reporter")
 CFG = load_settings()
+require_keys(log)
 broker = AlpacaBroker()
 esc = lambda s: html.escape(str(s))
 BIAS = {"long": "🟢 long", "flat": "⚪ flat", "exit": "🔴 uscire"}

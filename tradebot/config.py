@@ -60,3 +60,15 @@ def deep_merge(base: dict, over: dict) -> dict:
     for k, v in over.items():
         out[k] = deep_merge(base.get(k, {}), v) if isinstance(v, dict) else v
     return out
+
+
+def require_keys(log: logging.Logger):
+    """Se mancano le chiavi Alpaca non ha senso ripartire a raffica: spiega e attendi."""
+    import sys
+    import time
+    if ENV.alpaca_key and ENV.alpaca_secret:
+        return
+    log.error("ALPACA_API_KEY / ALPACA_SECRET_KEY mancanti nel file .env. "
+              "Compilale e riavvia con: docker compose up -d   (nuovo tentativo tra 5 minuti)")
+    time.sleep(300)
+    sys.exit(1)

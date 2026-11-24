@@ -15,10 +15,11 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from tradebot import db, macro, regime, risk, signals
 from tradebot.broker import AlpacaBroker, is_crypto, norm
-from tradebot.config import ENV, deep_merge, load_settings, setup_logging
+from tradebot.config import ENV, require_keys, deep_merge, load_settings, setup_logging
 
 log = setup_logging("trader")
 CFG = load_settings()
+require_keys(log)
 broker = AlpacaBroker()
 TF = CFG["timeframes"]
 UNIVERSE = CFG["universe"]["crypto"] + CFG["universe"]["stocks"]

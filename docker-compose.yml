@@ -1,20 +1,36 @@
-# Tre bot indipendenti che condividono lo stesso database SQLite (volume ./data).
+# Tre bot indipendenti che condividono lo stesso database SQLite (cartella ./data).
+# Avvio:   docker compose up -d --build
+# Log:     docker compose logs -f
+# Stop:    docker compose down
 x-common: &common
   build: .
+  image: tradebot:latest
   env_file: .env
   environment: {DB_PATH: /app/data/tradebot.db}
   volumes: ["./data:/app/data", "./config:/app/config:ro"]
-  restart: always
+  restart: always          # riparte da solo dopo crash o riavvio del PC/Docker
   logging: {driver: json-file, options: {max-size: "10m", max-file: "5"}}
 
 services:
-  strategist:            # Bot 1: il "senior trader" – regime di mercato, bias, lezioni
+  strategist:              # Bot 1: il "senior trader" – regime di mercato, bias, lezioni
     <<: *common
     command: python -m bots.strategist
-  trader:                # Bot 2: esecuzione – segnali, rischio, ordini, stop
+  trader:                  # Bot 2: esecuzione – segnali, rischio, ordini, stop
     <<: *common
     command: python -m bots.trader
     depends_on: [strategist]
-  reporter:              # Bot 3: Telegram – report, alert, comandi
+  reporter:                # Bot 3: Telegram – report, alert, comandi
     <<: *common
     command: python -m bots.reporter
+
+  # Strumenti a richiesta (non partono con "up"):
+  #   docker compose run --rm tools python -m tradebot.check --telegram-test
+  #   docker compose run --rm tools python -m tradebot.optimize --days 730
+  #   docker compose run --rm tools python -m tradebot.backtest --symbol BTC/USD --days 730
+  #   docker compose run --rm tools python -m pytest -q tests
+  tools:
+    <<: *common
+    restart: "no"
+    volumes: ["./data:/app/data", "./config:/app/config"]   # scrivibile: l'ottimizzatore salva optimized.yaml
+    profiles: ["tools"]
+    command: python -m tradebot.check

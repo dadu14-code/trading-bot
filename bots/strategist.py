@@ -8,11 +8,12 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from tradebot import db, macro, patterns, regime, risk
 from tradebot.broker import AlpacaBroker
-from tradebot.config import ENV, load_settings, setup_logging
+from tradebot.config import ENV, require_keys, load_settings, setup_logging
 from tradebot.llm import SeniorTrader
 
 log = setup_logging("strategist")
 CFG = load_settings()
+require_keys(log)
 broker = AlpacaBroker()
 senior = SeniorTrader()
 
