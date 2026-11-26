@@ -15,7 +15,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from tradebot import claude_value, db, ladder, macro, telegram
 from tradebot.broker import get_broker
-from tradebot.config import ENV, require_keys, load_settings, setup_logging
+from tradebot.config import ENV, fmt_price, require_keys, load_settings, setup_logging
 from tradebot.stats import go_live_readiness, max_drawdown, trade_stats
 from tradebot.check import run_checks
 
@@ -43,10 +43,10 @@ def positions_block() -> str:
         t = trades.get(sym)
         short = p.get("side") == "short" or p["qty"] < 0
         pct = (p["price"] / p["avg_entry"] - 1) * (-1 if short else 1)
-        stop = f" · stop {t['stop']:,.4g}" if t else ""
+        stop = f" · stop {fmt_price(t['stop'])}" if t else ""
         tag = f" [{STRAT.get(t.get('strategy') or 'trend', '')}]" if t else ""
-        lines.append(f"• <b>{sym}</b> {'SHORT' if short else 'LONG'}{tag} {abs(p['qty']):g} @ {p['avg_entry']:,.4g} → "
-                     f"{p['price']:,.4g} ({pct:+.2%}, {p['unrealized_pl']:+,.2f}$){stop}")
+        lines.append(f"• <b>{sym}</b> {'SHORT' if short else 'LONG'}{tag} {abs(p['qty']):g} @ {fmt_price(p['avg_entry'])} → "
+                     f"{fmt_price(p['price'])} ({pct:+.2%}, {p['unrealized_pl']:+,.2f}$){stop}")
     return "\n".join(lines)
 
 
@@ -192,7 +192,7 @@ def evening_report():
                  (f"   P&L realizzato: <b>{st['pnl']:+,.2f}$</b> (win {st['win_rate']:.0%})" if closed else ""))
     for t in opened:
         lines.append(f"• ➕ {esc(t['symbol'])} {(t.get('side') or 'long').upper()} [{STRAT.get(t.get('strategy') or 'trend')}] "
-                     f"@ {t['entry_price']:,.4g} — <i>{esc(t['rationale'][:220])}</i>")
+                     f"@ {fmt_price(t['entry_price'])} — <i>{esc(t['rationale'][:220])}</i>")
     for t in closed:
         lines.append(f"• ➖ {esc(t['symbol'])} [{STRAT.get(t.get('strategy') or 'trend')}] {t['pnl']:+,.2f}$ "
                      f"({(t['r_multiple'] or 0):+.2f}R) — {esc(t['exit_reason'])}")

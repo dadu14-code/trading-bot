@@ -19,8 +19,13 @@ from . import patterns, regime
 _norm = lambda x: (max(-1, min(1, x)) + 1) / 2
 
 
-def _analog_text(an) -> str:
-    return f"{an.n} casi, E[r]={an.exp_return:+.2%}, win {an.win_rate:.0%}" if an else "n/d"
+def _analog_text(an, side: str = "long") -> str:
+    """Cosa è successo dopo situazioni simili, dal punto di vista della direzione dell'operazione."""
+    if not an:
+        return "n/d"
+    if side == "short":
+        return f"{an.n} casi simili: prezzo poi {an.exp_return:+.2%} in media, ribasso nel {1 - an.win_rate:.0%} dei casi"
+    return f"{an.n} casi simili: prezzo poi {an.exp_return:+.2%} in media, rialzo nel {an.win_rate:.0%} dei casi"
 
 
 def evaluate_entry(symbol: str, bars: dict[str, pd.DataFrame], directive_sym: dict | None, cfg: dict) -> dict:
@@ -88,7 +93,7 @@ def evaluate_short(symbol: str, bars: dict[str, pd.DataFrame], directive_sym: di
         vetoes.append(f"bot Strategia: bias {directive_sym.get('bias')} (serve 'short')")
     go = composite >= sh.get("entry_threshold", sc["entry_threshold"]) and not vetoes
     trig_txt = "+".join(n for n, v in (("rimbalzo fallito", st["failed_rally"]), ("rottura minimi", st["breakdown"])) if v) or "-"
-    reason = f"SHORT · 1D {lt['label']}({lt['score']:+.2f}) · 4H {mt['score']:+.2f} · trigger {trig_txt} · analogie {_analog_text(an)}"
+    reason = f"SHORT · 1D {lt['label']}({lt['score']:+.2f}) · 4H {mt['score']:+.2f} · trigger {trig_txt} · analogie {_analog_text(an, "short")}"
     return {"symbol": symbol, "strategy": "short", "side": "short", "go": go, "composite": round(composite, 3),
             "vetoes": vetoes, "reason": reason, "long": lt, "medium": mt, "short": st,
             "analog": an.as_dict() if an else None, "candles": cp, "atr_4h": mt["atr"]}

@@ -15,7 +15,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from tradebot import db, ladder, macro, regime, risk, signals
 from tradebot.broker import get_broker, is_crypto, norm
-from tradebot.config import ENV, require_keys, deep_merge, load_settings, setup_logging
+from tradebot.config import ENV, fmt_price, require_keys, deep_merge, load_settings, setup_logging
 
 log = setup_logging("trader")
 CFG = load_settings()
@@ -49,7 +49,7 @@ def record_close(t: dict, px: float, reason: str):
                   + CFG["capitulation"].get("cooldown_hours", 48) * 3600)
     db.kv_set(f"backup_level:{t['id']}", None)
     db.event("trade", f"{'🟢' if pnl >= 0 else '🔴'} <b>CHIUSO {LABEL.get(t.get('strategy') or 'trend', '')} {t['symbol']}</b>"
-                      f" @ {px:,.4g}\nP&L {pnl:+,.2f}$ ({r:+.2f}R) · motivo: {reason}")
+                      f" @ {fmt_price(px)}\nP&L {pnl:+,.2f}$ ({r:+.2f}R) · motivo: {reason}")
     log.info("chiuso %s %s pnl=%.2f motivo=%s", t.get("side"), t["symbol"], pnl, reason)
 
 
@@ -155,9 +155,9 @@ def look_for_entries(acct: dict, positions: dict, cb: dict, evals: dict):
         risk_cash = abs(fill - stop) * qty
         target = ""
         if ev["strategy"] == "capitulation":
-            target = f" · obiettivo {fill + CFG['capitulation']['target_r'] * abs(fill - stop):,.4g}"
-        db.event("trade", f"{ICON[ev['strategy']]} <b>APERTO {LABEL[ev['strategy']]} {sym}</b> {qty:g} @ {fill:,.4g}\n"
-                          f"Stop {stop:,.4g}{target} (rischio {risk_cash:,.2f}$ = {risk_cash / acct['equity']:.2%})"
+            target = f" · obiettivo {fmt_price(fill + CFG['capitulation']['target_r'] * abs(fill - stop))}"
+        db.event("trade", f"{ICON[ev['strategy']]} <b>APERTO {LABEL[ev['strategy']]} {sym}</b> {qty:g} @ {fmt_price(fill)}\n"
+                          f"Stop {fmt_price(stop)}{target} (rischio {risk_cash:,.2f}$ = {risk_cash / acct['equity']:.2%})"
                           + (" · 🛡 stop emergenza sul broker" if backup else "") +
                           f"\nPunteggio {ev['composite']:.2f} · {ev['reason']}"
                           + (f"\n<i>vol portafoglio {pvol:.0%} → rischio x{vmult:.2f}</i>" if vmult < 1 else ""))

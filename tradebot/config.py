@@ -72,3 +72,13 @@ def require_keys(log: logging.Logger):
               "Compilale e riavvia con: docker compose up -d   (nuovo tentativo tra 5 minuti)")
     time.sleep(300)
     sys.exit(1)
+
+
+def fmt_price(v: float) -> str:
+    """Prezzi leggibili, mai in notazione scientifica: 60,140 · 1,690 · 70.03 · 0.4521"""
+    v = float(v)
+    if abs(v) >= 1000:
+        return f"{v:,.0f}"
+    if abs(v) >= 1:
+        return f"{v:,.2f}"
+    return f"{v:.4g}"
