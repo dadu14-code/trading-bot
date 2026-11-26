@@ -108,8 +108,9 @@ def test_short_exit_mirror():
 def test_short_needs_directive_and_bear():
     ev = signals.evaluate_short("SPY", BARS, {"bias": "flat"}, CFG)
     assert not ev["go"] and any("serve 'short'" in v for v in ev["vetoes"])
-    ev = signals.evaluate_short("BTC/USD", BARS, {"bias": "short"}, CFG)
-    assert any("non abilitato" in v for v in ev["vetoes"])     # niente short sulle crypto
+    only_etf = {**CFG, "shorts": {**CFG["shorts"], "symbols": ["SPY"]}}
+    ev = signals.evaluate_short("BTC/USD", BARS, {"bias": "short"}, only_etf)
+    assert any("non abilitato" in v for v in ev["vetoes"])     # short solo sui simboli configurati
 
 
 def test_short_sizing_and_stop():
@@ -223,3 +224,109 @@ def test_claude_value_comparison():
     v = claude_value.compare(lambda sym: 690.0)          # short ombra in guadagno di 20 $
     assert v["without_claude"] == 20 and v["with_claude"] >= 50
     assert abs(v["value"] - (v["edge"] - v["cost"])) < 1e-9
+
+
+class FakeKraken:
+    """Imita ccxt.krakenfutures: mercati, ticker, candele, funding (nessuna rete)."""
+    def __init__(self):
+        self.px = {"BTC/USD:USD": 90_000.0, "ETH/USD:USD": 3_000.0, "SOL/USD:USD": 150.0}
+        self.rate = {"BTC/USD:USD": 0.00001, "ETH/USD:USD": -0.00002, "SOL/USD:USD": 0.0}
+        mk = lambda sym, mid, step: {"symbol": sym, "id": mid, "precision": {"amount": step},
+                                     "limits": {"amount": {"min": step}}}
+        self.markets_by_id = {"PF_XBTUSD": [mk("BTC/USD:USD", "PF_XBTUSD", 0.0001)],
+                              "PF_ETHUSD": [mk("ETH/USD:USD", "PF_ETHUSD", 0.001)],
+                              "PF_SOLUSD": [mk("SOL/USD:USD", "PF_SOLUSD", 0.01)]}
+        self.ohlcv_calls = []
+
+    def load_markets(self):
+        return {}
+
+    def market(self, sym):
+        return next(v[0] for v in self.markets_by_id.values() if v[0]["symbol"] == sym)
+
+    def fetch_ticker(self, sym):
+        return {"last": self.px[sym], "info": {}}
+
+    def fetch_funding_rates(self, syms):
+        return {s: {"fundingRate": self.rate[s]} for s in syms}
+
+    def fetch_ohlcv(self, sym, tf, since=None, limit=None, params=None):
+        self.ohlcv_calls.append((sym, tf, params))
+        df = backtest.synthetic(300)
+        step = {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}[tf]
+        k = self.px[sym] / df["close"].iloc[-1]          # candele coerenti con il prezzo del ticker
+        return [[since + i * step, r.open * k, r.high * k, r.low * k, r.close * k, r.volume] for i, r in enumerate(df.itertuples())]
+
+
+def _paper(writer=True):
+    from tradebot.paper import PaperBroker
+    db.init()
+    db.kv_set("paper_state", None)
+    return PaperBroker(CFG, writer=writer, exchange=FakeKraken())
+
+
+def test_paper_account_starts_at_100_eur():
+    b = _paper()
+    a = b.account()
+    assert abs(a["equity"] - 100 * CFG["report"]["usd_per_eur"]) < 1e-6 and b.positions() == {}
+
+
+def test_paper_long_fill_fee_and_pnl():
+    b = _paper()
+    q = b.normalize_qty("BTC/USD", 0.00037)
+    assert abs(q - 0.0003) < 1e-12                               # arrotondato per difetto al contratto
+    assert b.normalize_qty("BTC/USD", 0.00005) == 0               # sotto il minimo
+    fill = b.buy("BTC/USD", q)
+    assert fill > 90_000                                          # slittamento contro di noi
+    b.ex.px["BTC/USD:USD"] = 99_000.0
+    b._cache.clear()
+    eq_open = b.account()["equity"]
+    exit_px = b.close("BTC/USD")
+    st = b._state()
+    assert not st["positions"] and st["fees"] > 0
+    expected = 108 + q * (exit_px - fill) - st["fees"]
+    assert abs(b.account()["equity"] - expected) < 1e-6 and eq_open > 108
+
+
+def test_paper_short_profits_when_price_falls():
+    b = _paper()
+    b.sell_short("ETH/USD", 0.01)
+    assert b.positions()["ETHUSD"]["side"] == "short"
+    b.ex.px["ETH/USD:USD"] = 2_700.0
+    b._cache.clear()
+    assert b.positions()["ETHUSD"]["unrealized_pl"] > 0
+    b.close("ETH/USD")
+    assert b.account()["equity"] > 108 - 0.1
+
+
+def test_paper_no_leverage_and_writer_only():
+    import pytest
+    b = _paper()
+    with pytest.raises(ValueError):
+        b.buy("BTC/USD", 0.01)                                    # 900 $ con un conto da 108 $
+    ro = _paper(writer=False)
+    with pytest.raises(RuntimeError):
+        ro.buy("SOL/USD", 0.1)
+
+
+def test_paper_funding_long_pays_short_earns():
+    import time
+    b = _paper()
+    b.buy("BTC/USD", 0.0005)
+    b.sell_short("ETH/USD", 0.01)
+    st = b._state()
+    st["last_funding_ts"] = time.time() - 10 * 3600               # 10 ore fa
+    db.kv_set("paper_state", st)
+    before = st["cash"]
+    b.account()
+    st2 = b._state()
+    btc_pay = 0.0005 * 90_000 * 0.00001 * 10                      # long BTC, tasso positivo → paga
+    eth_gain = 0.01 * 3_000 * 0.00002 * 10                        # short ETH, tasso negativo → paga lo short
+    assert abs((st2["cash"] - before) - (-btc_pay - eth_gain)) < 1e-6
+
+
+def test_paper_history_paginates():
+    b = _paper()
+    df = b.history("SOL/USD", "1Hour", 75)
+    sym, tf, params = b.ex.ohlcv_calls[-1]
+    assert sym == "SOL/USD:USD" and tf == "1h" and params["paginate"] and len(df) == 300 and str(df.index.tz) == "UTC"

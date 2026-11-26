@@ -15,22 +15,30 @@ def run_checks(telegram_test: bool = False) -> list[tuple[str, bool, str]]:
     cfg = load_settings()
     out = []
 
-    def alpaca_account():
-        from .broker import AlpacaBroker
-        b = AlpacaBroker()
-        a = b.account()
-        return f"{'DEMO' if ENV.alpaca_paper else '⚠️ REALE'} · equity {a['equity']:,.2f}$ · mercato USA {'aperto' if b.market_open() else 'chiuso'}"
-    out.append(_try("Alpaca conto", alpaca_account))
+    bname = cfg.get("broker", "alpaca")
+    label = {"alpaca": "Alpaca", "kraken_paper": "Kraken (conto simulato)"}.get(bname, bname)
 
-    def alpaca_data():
-        from .broker import AlpacaBroker
-        b = AlpacaBroker()
+    def broker_account():
+        from .broker import get_broker
+        b = get_broker(cfg)
+        a = b.account()
+        if bname == "alpaca":
+            return f"{'DEMO' if ENV.alpaca_paper else '⚠️ REALE'} · equity {a['equity']:,.2f}$ · mercato USA {'aperto' if b.market_open() else 'chiuso'}"
+        return f"SIMULATO sui prezzi veri · equity {a['equity']:,.2f}$ · nessun ordine reale"
+    out.append(_try(f"{label} conto", broker_account))
+
+    def broker_data():
+        from .broker import get_broker
+        b = get_broker(cfg)
         res = []
         for sym in cfg["universe"]["crypto"][:1] + cfg["universe"]["stocks"][:1]:
             df = b.bars(sym, "1Hour")
             res.append(f"{sym} {len(df)} barre 1H, ultimo {df['close'].iloc[-1]:,.2f}")
+        if hasattr(b, "funding_rates"):
+            fr = b.funding_rates()
+            res.append("funding orario " + ", ".join(f"{k} {v:+.5%}" for k, v in fr.items()) if fr else "funding n/d")
         return " · ".join(res)
-    out.append(_try("Alpaca dati", alpaca_data))
+    out.append(_try(f"{label} dati", broker_data))
 
     def claude():
         if not ENV.anthropic_key:
@@ -64,5 +72,5 @@ if __name__ == "__main__":
     results = run_checks("--telegram-test" in sys.argv)
     for name, ok, detail in results:
         print(f"{'OK ' if ok else 'ERR'}  {name:24s} {detail}")
-    critical = [r for r in results if r[0].startswith("Alpaca")]
+    critical = results[:2]   # conto e dati del broker
     sys.exit(0 if all(ok for _, ok, _ in critical) else 1)

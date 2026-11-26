@@ -48,7 +48,7 @@ def run():
             if len(df) < 2500:
                 raise ValueError(f"storia troppo corta ({len(df)} barre)")
             data[sym] = df
-            fee = backtest.FEES["crypto" if "/" in sym else "stock"]
+            fee = backtest.fee_for(sym, CFG)
             log.info("precalcolo %s (%d barre)", sym, len(df))
             pres.append((backtest.precompute(df, CFG), fee))
         except Exception as e:
@@ -70,7 +70,7 @@ def run():
                         ("capitulation", list(data))):
         trades = []
         for sym in syms:
-            fee = backtest.FEES["crypto" if "/" in sym else "stock"]
+            fee = backtest.fee_for(sym, CFG)
             trades += backtest.run_module(data[sym], CFG, strat, fee=fee)["trades"]
         modules[strat] = backtest.trade_stats(trades)
 

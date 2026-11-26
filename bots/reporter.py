@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from tradebot import claude_value, db, ladder, macro, telegram
-from tradebot.broker import AlpacaBroker
+from tradebot.broker import get_broker
 from tradebot.config import ENV, require_keys, load_settings, setup_logging
 from tradebot.stats import go_live_readiness, max_drawdown, trade_stats
 from tradebot.check import run_checks
@@ -22,7 +22,7 @@ from tradebot.check import run_checks
 log = setup_logging("reporter")
 CFG = load_settings()
 require_keys(log)
-broker = AlpacaBroker()
+broker = get_broker(CFG)
 esc = lambda s: html.escape(str(s))
 GIORNI = ["lun", "mar", "mer", "gio", "ven", "sab", "dom"]
 BIAS = {"long": "🟢 long", "short": "🟣 short", "flat": "⚪ flat", "exit": "🔴 uscire"}
@@ -53,7 +53,10 @@ def positions_block() -> str:
 def account_line() -> str:
     a = broker.account()
     day = a["equity"] / a["last_equity"] - 1 if a["last_equity"] else 0
-    return f"💰 Equity <b>{a['equity']:,.2f}$</b> ({day:+.2%} oggi) · cash {a['cash']:,.2f}$"
+    rp = CFG.get("report", {})
+    eur = f" (≈ {a['equity'] / rp.get('usd_per_eur', 1.08):,.2f}€)" if rp.get("real_currency", "EUR") == "EUR" else ""
+    sim = " · <i>conto simulato su prezzi Kraken</i>" if CFG.get("broker") == "kraken_paper" else ""
+    return f"💰 Equity <b>{a['equity']:,.2f}$</b>{eur} ({day:+.2%} oggi) · cash {a['cash']:,.2f}${sim}"
 
 
 def result_block(hours: int, title: str) -> list[str]:
@@ -88,8 +91,16 @@ def result_block(hours: int, title: str) -> list[str]:
     # proiezione: stesso rendimento % sul capitale reale, ma costo Claude identico (non scala col capitale)
     g_day, c_day = cap * change / eq_start, u["cost_usd"] / fx
     g_all, c_all = cap * tot_change / eq0, u_all["cost_usd"] / fx
-    lines += [f"• 🔮 Su un conto reale da {cap:,.0f}{sym}: {g_day:+.2f}{sym} − Claude {c_day:.2f}{sym} = "
-              f"<b>{g_day - c_day:+.2f}{sym}</b> · dall'inizio {g_all - c_all:+.2f}{sym}"]
+    if hasattr(broker, "costs"):   # conto simulato: commissioni, funding e tasse stimate
+        k = broker.costs()
+        lines.append(f"• Commissioni pagate dall'inizio {k['fees']:.2f}$ · funding {k['funding']:+.2f}$ "
+                     "(già inclusi nel conto)")
+        realized_all = sum(t["pnl"] or 0 for t in db.closed_trades(limit=100000))
+        tax = 0.33 * max(realized_all - k["fees"] + k["funding"], 0)
+        lines.append(f"• Tasse stimate se fosse reale (crypto 33%): {tax:.2f}$ · <i>da verificare con un commercialista</i>")
+    else:
+        lines += [f"• 🔮 Su un conto reale da {cap:,.0f}{sym}: {g_day:+.2f}{sym} − Claude {c_day:.2f}{sym} = "
+                  f"<b>{g_day - c_day:+.2f}{sym}</b> · dall'inizio {g_all - c_all:+.2f}{sym}"]
     return lines
 
 

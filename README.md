@@ -52,9 +52,20 @@
 Claude **non piazza ordini**: orienta. I limiti di rischio sono nel codice e non sono scavalcabili.
 Senza chiave Anthropic il sistema funziona lo stesso, con regole di riserva più prudenti.
 
+## Broker e conto
+Impostato in `config/settings.yaml` → `broker:`
+- **`kraken_paper`** (attuale): conto **simulato da 100 €** sui **prezzi veri di Kraken Futures** (perpetui
+  BTC, ETH, SOL senza leva, long e short), con commissioni, slittamento, dimensioni minime dei contratti e funding.
+  Non servono chiavi né conti: è la prova generale del conto reale da 100 €.
+- **`alpaca`**: conto demo/reale Alpaca (azioni USA, ETF, crypto). Per un residente UE gli ETF USA non sono
+  acquistabili (regola PRIIPs).
+
+Il passaggio da un broker all'altro è automatico: lo storico del vecchio conto viene archiviato e confronti e
+statistiche ripartono da zero (diario, lezioni e costi Claude restano).
+
 ## Setup (≈20 minuti)
 
-1. **Conto demo Alpaca** (gratis): registrati su <https://alpaca.markets>, passa a *Paper Trading*, genera le API key.
+1. *(Solo con `broker: alpaca`)* **Conto demo Alpaca** (gratis): registrati su <https://alpaca.markets>, passa a *Paper Trading*, genera le API key.
    Copre crypto (24/7) e azioni/ETF USA.
 2. **Bot Telegram**: su Telegram scrivi a `@BotFather` → `/newbot` → copia il token. Manda un messaggio
    al tuo bot, poi apri `https://api.telegram.org/bot<TOKEN>/getUpdates` e copia `chat.id`.

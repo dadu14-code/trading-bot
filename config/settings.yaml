@@ -1,7 +1,21 @@
-# Universo: le crypto girano 24/7, gli ETF solo a mercato USA aperto.
+# Broker: "kraken_paper" = conto SIMULATO da 100 € sui prezzi veri di Kraken Futures
+#         (perpetui, senza leva, long e short); "alpaca" = conto demo/reale Alpaca.
+broker: kraken_paper
+
+paper:
+  exchange: krakenfutures
+  start_capital: 100           # nella valuta di report.real_currency (EUR)
+  fee_rate: 0.0005             # commissione Kraken Futures "taker" (prudente: ignora la promo a 0 €)
+  slippage_bps: 5              # 0,05% di slittamento per ordine a mercato
+  max_leverage: 1.0            # niente leva
+  markets: {"BTC/USD": "PF_XBTUSD", "ETH/USD": "PF_ETHUSD", "SOL/USD": "PF_SOLUSD"}
+
+# Universo: con 100 € su un conto italiano solo crypto (gli ETF USA sono vietati ai
+# piccoli investitori UE dalla regola PRIIPs). Per tornare ad Alpaca: broker: alpaca
+# e reinserire stocks: ["SPY", "QQQ", "GLD"].
 universe:
   crypto: ["BTC/USD", "ETH/USD", "SOL/USD"]
-  stocks: ["SPY", "QQQ", "GLD"]
+  stocks: []
 
 timeframes:            # analisi temporale multi-orizzonte
   long: "1Day"         # tendenza primaria (mesi)
@@ -12,7 +26,8 @@ risk:
   risk_per_trade_pct: 0.75     # % equity rischiata tra ingresso e stop
   max_position_pct: 20         # peso massimo di un singolo asset
   max_total_exposure_pct: 80   # esposizione lorda massima
-  max_crypto_exposure_pct: 40  # le crypto sono correlate: tetto di cluster
+  max_crypto_exposure_pct: 60  # le crypto sono correlate: tetto di cluster (universo solo crypto)
+  min_order_usd: 2             # ordine minimo (conto piccolo: la vecchia soglia di 10 $ bloccava quasi tutto)
   max_open_positions: 5
   atr_stop_mult: 2.0           # stop iniziale = ingresso - 2*ATR(4H)
   atr_trail_mult: 3.0          # trailing chandelier = max dal'ingresso - 3*ATR(4H)
@@ -36,11 +51,11 @@ signals:
   analog_horizon_bars: 24      # orizzonte di uscita delle analogie (barre 1H)
   analog_min_winrate: 0.52
 
-# SHORT sugli ETF (Alpaca non permette short sulle crypto). Vende i rimbalzi falliti
-# in trend ribassista; serve il bias "short" esplicito del bot Strategia.
+# SHORT: vende i rimbalzi falliti in trend ribassista; serve il bias "short" esplicito
+# del bot Strategia. Con i perpetui Kraken anche sulle crypto (con Alpaca: solo ETF).
 shorts:
   enabled: true
-  symbols: ["SPY", "QQQ", "GLD"]
+  symbols: ["BTC/USD", "ETH/USD", "SOL/USD"]
   risk_mult: 0.75            # gli short rischiano squeeze: size ridotta del 25%
   entry_threshold: 0.58
   atr_stop_mult: 2.0

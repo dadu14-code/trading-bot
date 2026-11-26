@@ -7,3 +7,4 @@ pyyaml>=6.0
 requests>=2.31
 python-dotenv>=1.0
 tzdata>=2024.1      # fusi orari su Windows
+ccxt==4.5.94

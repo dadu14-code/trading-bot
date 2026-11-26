@@ -21,7 +21,15 @@ from .config import load_settings
 from .stats import max_drawdown, trade_stats
 
 AGG = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-FEES = {"crypto": 0.0025, "stock": 0.0005}   # commissione+slippage per lato
+FEES = {"crypto": 0.0025, "stock": 0.0005}   # commissione+slippage per lato (Alpaca)
+
+
+def fee_for(sym: str, cfg: dict) -> float:
+    """Costo per lato: con il conto simulato Kraken = commissione + slittamento configurati."""
+    if cfg.get("broker") == "kraken_paper":
+        pc = cfg.get("paper", {})
+        return float(pc.get("fee_rate", 0.0005)) + float(pc.get("slippage_bps", 5)) / 10_000
+    return FEES["crypto" if "/" in sym else "stock"]
 
 
 def synthetic(n=6000, seed=7) -> pd.DataFrame:
@@ -202,9 +210,12 @@ def load(symbol=None, days=730, csv=None, synthetic_data=False) -> pd.DataFrame:
         df = pd.read_csv(csv, parse_dates=[0], index_col=0)
         df.index = pd.to_datetime(df.index, utc=True)
         return df
-    from .broker import AlpacaBroker, LOOKBACK
+    from .broker import LOOKBACK, get_broker
+    b = get_broker()
+    if hasattr(b, "history"):
+        return b.history(symbol, "1Hour", days)
     LOOKBACK["1Hour"] = (days, days)
-    return AlpacaBroker().bars(symbol, "1Hour")
+    return b.bars(symbol, "1Hour")
 
 
 def main():
@@ -217,7 +228,7 @@ def main():
     a = ap.parse_args()
     cfg = load_settings()
     df = load(a.symbol, a.days, a.csv, a.synthetic)
-    fee = FEES["crypto" if (a.symbol or "/").find("/") >= 0 else "stock"]
+    fee = fee_for(a.symbol or "X/Y", cfg)
     print(f"Barre: {len(df)}")
     for strat in (["trend", "short", "capitulation"] if a.strategy == "all" else [a.strategy]):
         if strat == "short" and a.symbol and "/" in a.symbol:

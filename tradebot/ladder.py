@@ -27,7 +27,9 @@ def _cfg(cfg: dict) -> dict:
     lc = cfg.get("capital_ladder", {})
     rp = cfg.get("report", {})
     return {"levels": lc.get("levels_eur", DEFAULT_LEVELS), "fx": rp.get("usd_per_eur", 1.08),
-            "margin_min": lc.get("margin_min_usd", 2000), "min_order": lc.get("min_order_usd", 1.0)}
+            "margin_min": lc.get("margin_min_usd", 2000), "min_order": lc.get("min_order_usd", 1.0),
+            "fee_crypto": (float(cfg.get("paper", {}).get("fee_rate", 0.0005)) + float(cfg.get("paper", {}).get("slippage_bps", 5)) / 10_000)
+                          if cfg.get("broker") == "kraken_paper" else FEES["crypto"]}
 
 
 def init():
@@ -68,7 +70,7 @@ def sync(real_equity: float, cfg: dict):
             eq = level_equity_usd(lv, k["fx"])
             notional = frac * eq
             qty, reason = notional / t["entry_price"], None
-            if t["side"] == "short":
+            if t["side"] == "short" and t["asset_class"] == "stock":   # i perpetui crypto non richiedono margin
                 if eq < k["margin_min"]:
                     reason = f"short: serve un conto margin ≥ {k['margin_min']:,.0f} $"
                 else:
@@ -90,7 +92,7 @@ def sync(real_equity: float, cfg: dict):
                 c.execute("UPDATE ladder_trades SET status='void' WHERE id=?", (m["id"],))
             continue
         sgn = -1 if m["side"] == "short" else 1
-        fee = FEES.get(m["asset_class"], 0.0025)
+        fee = k["fee_crypto"] if m["asset_class"] == "crypto" else FEES["stock"]
         pnl = sgn * (m["tex"] - m["entry_price"]) * m["qty"] - fee * (m["tex"] + m["entry_price"]) * m["qty"]
         with db.conn() as c:
             c.execute("UPDATE ladder_trades SET status='closed', exit_price=?, pnl=?, closed_ts=? WHERE id=?",

@@ -66,7 +66,7 @@ def require_keys(log: logging.Logger):
     """Se mancano le chiavi Alpaca non ha senso ripartire a raffica: spiega e attendi."""
     import sys
     import time
-    if ENV.alpaca_key and ENV.alpaca_secret:
+    if load_settings().get("broker", "alpaca") != "alpaca" or (ENV.alpaca_key and ENV.alpaca_secret):
         return
     log.error("ALPACA_API_KEY / ALPACA_SECRET_KEY mancanti nel file .env. "
               "Compilale e riavvia con: docker compose up -d   (nuovo tentativo tra 5 minuti)")

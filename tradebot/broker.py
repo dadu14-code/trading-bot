@@ -186,3 +186,17 @@ class AlpacaBroker:
             time.sleep(1)
         log.warning("ordine %s non eseguito entro %ss, uso ultimo prezzo", order_id, timeout)
         return self.last_price(symbol)
+
+
+def get_broker(cfg: dict | None = None, writer: bool = False):
+    """Broker scelto in settings.yaml: 'alpaca' (demo/reale Alpaca) o 'kraken_paper'
+    (conto simulato sui prezzi veri di Kraken Futures)."""
+    from .config import load_settings
+    cfg = cfg or load_settings()
+    name = cfg.get("broker", "alpaca")
+    if name == "kraken_paper":
+        from .paper import PaperBroker
+        return PaperBroker(cfg, writer=writer)
+    if name == "alpaca":
+        return AlpacaBroker()
+    raise ValueError(f"broker sconosciuto: {name}")

@@ -14,13 +14,13 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from tradebot import db, ladder, macro, regime, risk, signals
-from tradebot.broker import AlpacaBroker, is_crypto, norm
+from tradebot.broker import get_broker, is_crypto, norm
 from tradebot.config import ENV, require_keys, deep_merge, load_settings, setup_logging
 
 log = setup_logging("trader")
 CFG = load_settings()
 require_keys(log)
-broker = AlpacaBroker()
+broker = get_broker(CFG, writer=True)
 TF = CFG["timeframes"]
 UNIVERSE = CFG["universe"]["crypto"] + CFG["universe"]["stocks"]
 
@@ -133,8 +133,11 @@ def look_for_entries(acct: dict, positions: dict, cb: dict, evals: dict):
         stop = signals.initial_stop(ev, price, CFG)
         qty, why = risk.position_size(acct["equity"], price, stop, size_mult(ev, dsym, gmult, cb, vmult),
                                       CFG, exposure, crypto_exp, is_crypto(sym))
-        if ev["side"] == "short":
-            qty = int(qty)
+        if ev["side"] == "short" and not is_crypto(sym):
+            qty = int(qty)                         # short su azioni: solo quantità intere
+        if qty > 0 and hasattr(broker, "normalize_qty"):
+            qty = broker.normalize_qty(sym, qty)   # precisione e minimo del contratto
+            why = why if qty > 0 else "sotto la dimensione minima del contratto"
         if qty <= 0:
             log.info("%s: segnale %s ok ma size 0 (%s)", sym, ev["strategy"], why)
             continue
@@ -299,8 +302,10 @@ def run_no_claude(all_bars: dict, equity: float, cb: dict):
         stop = signals.initial_stop(ev, px, CFG)
         qty, _ = risk.position_size(equity, px, stop, size_mult(ev, dsym, rd.get("global_risk_multiplier", 0.7), cb, vmult),
                                     CFG, exposure, crypto_exp, is_crypto(sym))
-        if ev["side"] == "short":
+        if ev["side"] == "short" and not is_crypto(sym):
             qty = int(qty)
+        if qty > 0 and hasattr(broker, "normalize_qty"):
+            qty = broker.normalize_qty(sym, qty)
         if qty <= 0:
             continue
         db.shadow_insert(variant=NO_CLAUDE, symbol=sym, side=ev["side"], strategy=ev["strategy"], qty=qty, entry_price=px,
@@ -311,8 +316,28 @@ def run_no_claude(all_bars: dict, equity: float, cb: dict):
         caps_open += ev["strategy"] == "capitulation"
 
 
+def check_broker_switch():
+    """Cambio di broker (es. Alpaca → conto simulato Kraken): archivia lo storico del vecchio conto
+    e fa ripartire da zero confronti e statistiche, così non si mescolano conti diversi."""
+    name = CFG.get("broker", "alpaca")
+    prev = db.kv_get("broker_name") or ("alpaca" if db.last_equity() else None)
+    if prev and prev != name:
+        db.archive_account_history(f"cambio broker: {prev} → {name}")
+        with db.conn() as c:
+            c.execute("UPDATE shadow_trades SET status='void', exit_reason='cambio broker' WHERE status='open'")
+        for k in ("ladder_start", "noclaude_start", "review_prices"):
+            db.kv_set(k, db.now_iso() if k != "review_prices" else None)
+        acct = broker.account()
+        db.event("system", f"🔀 <b>Cambio di conto: {prev} → {name}</b>\n"
+                           f"Nuovo capitale: {acct['equity']:,.2f}$. Storico del vecchio conto archiviato; confronto "
+                           "con/senza Claude e scala di capitali ripartono da adesso. Diario, lezioni e costi Claude restano.")
+        log.warning("cambio broker %s → %s", prev, name)
+    db.kv_set("broker_name", name)
+
+
 def cycle():
     try:
+        check_broker_switch()
         acct = broker.account()
         positions = broker.positions()
         exposure = sum(p["market_value"] for p in positions.values())

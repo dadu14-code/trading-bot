@@ -23,8 +23,8 @@ def position_size(equity: float, price: float, stop: float, risk_mult: float, cf
         caps.append(equity * rk["max_crypto_exposure_pct"] / 100 - crypto_exposure)
     max_notional = max(0.0, min(caps))
     qty = min(qty, max_notional / price)
-    if qty * price < 10:  # sotto i 10$ non ha senso
-        return 0.0, "esposizione massima raggiunta"
+    if qty * price < rk.get("min_order_usd", 10):
+        return 0.0, "sotto l'ordine minimo o esposizione massima raggiunta"
     return (round(qty, 6) if is_crypto else int(qty)), "ok"
 
 
